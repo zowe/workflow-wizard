@@ -1,0 +1,141 @@
+.*
+.*
+.*  This program and the accompanying materials are
+.*
+.*  made available under the terms of the Eclipse Public License v2.0 which accompanies
+.*
+.*  this distribution, and is available at https://www.eclipse.org/legal/epl-v20.html
+.*
+.*  
+.*
+.*  SPDX-License-Identifier: EPL-2.0
+.*
+.*  
+.*
+.*  Copyright Contributors to the Zowe Project.
+.*
+.*
+.**********************************************************************
+.* Macro: $WKSTG
+.*
+.*   Defines & INIT's the common working storage header area
+.*
+.*   Note: This macro assumes the DBC environment & requires the use
+.*         of the $BEGIN entry macro.
+.*
+.* Shamelessly stolen from the DBC project.
+.*
+.**********************************************************************
+         MACRO
+&LBL     $WKSTG &CMD,                  Positional command              >
+               &AUTH=NO,               Get current auth state (YES|NO) >
+               &DSECT=YES,             Gen DSECT YES|NO                >
+               &LEN=,                  Storage length                  >
+               &KEY=,                  Storage key                     >
+               &SP=,                   Storage subpool                 >
+               &NAME=WKSTG             DSECT name
+.*
+         PUSH  PRINT
+         PRINT OFF
+         COPY  $BMCGLBL                Global macro variables
+         POP   PRINT
+.*
+         GBLC  &SYSAM64                Set by IBM SYSSTATE macro
+         LCLA  &N
+         LCLC  &SA                     Save area size
+&N       SETA  &SYSNDX
+&SA      SETC  '54F'                   Support F4SA|F5SA|F7SA format 
+&WKSKEY  SETC  '&$WKSKEY'
+&WKSSP   SETC  '&$WKSSP'
+         LCLC  &P(2)                   Parm name & data for error msg
+.*
+.**********************************************************************
+.* Determine requested operation
+.**********************************************************************
+         AIF   (&CFG$BEG).LBL0000
+         MNOTE 8,'$BEGIN macro is required before $WKSTG can be used'
+         MEXIT ,
+.LBL0000 ANOP  ,
+         AIF   ('&SYSAM64' NE 'YES').LBL0010
+&CFGAM64 SETB  1                       Set global AMODE=64 flag
+.LBL0010 ANOP  ,
+         AIF   ('&CMD' EQ 'DEFINE').LBL1000
+         AIF   ('&CMD' EQ 'INIT').LBL2000
+&P(1)    SETC  'CMD','&CMD'
+         AGO   .MERR010
+
+.**********************************************************************
+.* Define working storage header area
+.**********************************************************************
+.LBL1000 ANOP  ,
+         AIF   ('&DSECT' NE 'YES').LBL1100
+&NAME    DSECT ,
+.LBL1100 ANOP  ,
+$WKBEG   DS    0D                      Beginning of wk stg header
+         AIF   (&CFGAM64).LBL1120
+&SA      SETC  '18F'                   Std save area size
+.LBL1120 ANOP  ,
+$WKSA    DS    &SA                     Save area 
+$WKEYE   DS    CL8                     Eyecatcher for working stg
+$WKLEN   DS    F                       Working stg len
+$WKADDR  DS    A                       Working stg addr
+$WKKEY   DS    H                       Working stg key
+$WKSP    DS    H                       Working stg subpool
+$WKMOD   DS    CL8                     Owning program name
+$WKTCB   DS    A                       Owning TCB addr
+$WKASCB  DS    A                       Owning ASCB addr
+$WKAUTH  DS    0F                      Authorization flag settings
+$WKAUTHE DS    X                       Byte 1 = Auth states on entry
+$WK_ASET EQU   X'80'                    Entry states initialized
+$WK_APF  EQU   X'08'                    APF authorized
+$WK_SUP  EQU   X'04'                    Supervisor state
+$WK_KEY  EQU   X'02'                    Authorized key
+$WKAUTHC DS    X                       Byte 2 = Current auth states
+$WKAKEYE DS    X                       Byte 3 = Auth/PSW key on entry
+$WKAKEYC DS    X                       Byte 4 = Auth/PSW key current
+$WKVA    DS    0F                      Start of variable stg area
+         MEXIT ,
+.**********************************************************************
+.* Initialize our working storage header area
+.**********************************************************************
+.LBL2000 ANOP  ,
+         AIF   (&CFG$WKI).MERR020      Already issued INIT? -> Yes
+&CFG$WKI SETB  1                       Indicate $WKSTG INIT issued
+&P(1)    SETC  'LEN','&LEN'
+         AIF   ('&LEN' EQ '').MERR010
+         AIF   ('&KEY' EQ '').LBL2010  Key supplied? No ->
+&WKSKEY  SETC  '&KEY'
+.LBL2010 ANOP  ,
+         AIF   ('&SP' EQ '').LBL2020   Subpool supplied? No ->
+&WKSSP   SETC  '&SP'
+.LBL2020 ANOP  ,
+         MVC   $WKEYE,=C'&$WKSEYE'     Set storage eyecatcher
+         $GETV INTO=(0),FROM=&LEN      Get stg length
+         LA    1,$WKBEG                Get stg addr
+         STM   0,1,$WKLEN              Save length & addr
+         $GETV INTO=(1),FROM=&WKSKEY   Get stg key
+         STH   1,$WKKEY                 and save
+         $GETV INTO=(0),FROM=&WKSSP    Get stg subpool
+         STH   0,$WKSP                  and save
+         MVC   $WKMOD,BMCPROG          Program name in wk stg
+         MVC   $WKTCB,PSATOLD-PSA      Current TCB addr into wk stg
+         MVC   $WKASCB,PSAAOLD-PSA     Current ASCB addr into wk stg
+         XC    $WKAUTH,$WKAUTH         Clear authorization states
+         AIF   ('&AUTH' NE 'YES').LBL2100
+         MNOTE 4,'$WKSTG use of AUTH=YES is not supported'
+         AGO   .LBL2100
+         $AUTH SAVE                    Save current auth states
+.LBL2100 ANOP  ,
+         LA    14,$WKVA                Variable stg area
+         L     15,=A(WKVAL)            Variable stg area len
+         LR    0,14
+         SR    1,1
+         MVCL  14,0                    Clear variable stg area
+         MEXIT ,
+.**********************************************************************
+.* Macro Error Messages
+.**********************************************************************
+.MERR010 MNOTE 8,'Parm=&P(1) value=&P(2) is missing or invalid'
+         MEXIT ,
+.MERR020 MNOTE 8,'$WKSTG INIT has alredy been issued'
+         MEND  ,
