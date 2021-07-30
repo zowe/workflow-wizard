@@ -1,25 +1,7 @@
-/*
-
-  This program and the accompanying materials are
-
-  made available under the terms of the Eclipse Public License v2.0 which accompanies
-
-  this distribution, and is available at https://www.eclipse.org/legal/epl-v20.html
-
-  
-
-  SPDX-License-Identifier: EPL-2.0
-
-  
-
-  Copyright Contributors to the Zowe Project.
-
-*/
-
 //****************************************************************************
 // DESCRIPTION
 //         Utility to build a workflow from templates
-// 
+//
 //****************************************************************************
 
 #ifndef CVIBUILDWORKFLOW_INC           // reinclude check
@@ -31,9 +13,6 @@
 #include "CviStr.h"                    // string class
 #include "CviPgm.h"                    // CviPgm based
 #include "CviVariables.h"              // needs variables
-
-#include "btype.h"                     // types
-#include "filestr.h"                   // file stream
 
           
 //         
@@ -142,19 +121,23 @@ public:                                // public members
                      VariableList *thePropVars);
 
    int GenGroup(CviStr &,              // generate steps for group
-                VariableList *,
-                VariableList *,
-                WorkflowStep *);
+                VariableList *,        // workflow variables
+                VariableList *,        // property variables
+                WorkflowStep *,        // Velocity macros
+                WorkflowStep *);       // translation steps
 
    int GenXML(CviStr &,                // generate XML
-              VariableList *,          
-              VariableList *,
-              WorkflowStep *);
+              VariableList *,          // workflow variables 
+              VariableList *,          // property variables 
+              WorkflowStep *,          // Velocity macros    
+              WorkflowStep *);         // translation steps  
 
    void GenSaveJCL(CviStr &,           // generate JCL to create a member
                    int theStepNum);    // JCL step number to create
 
    void GenStdProperties(VariableList *); // generate std properties for step
+
+   void FinalizeContent(CviStr &theStr);  // do final processing on content
 
    void PrepareContent(CviStr &theStr, // prepare content
                        VariableList *theWkVars = NULL,
@@ -200,6 +183,8 @@ public:                                // public members
                        VariableList *theVars);
 
    int  AddMacros(WorkflowStep *);     // add macros from macro steps
+
+   int  Translate(CviStr &);           // translate
 
    void ProcessIntMacros(VariableList *);  // process TARGET_DSN
 
@@ -324,9 +309,6 @@ class   BuildWorkflow : public CviPgm
 
 protected :                            // protected members
                  
-  fileds *itsTempDSN;                  // template fileds
-  filestream *itsTempStream;           // template stream
-
   WorkflowStep *itsSteps;              // workflow steps
   WorkflowStep *itsLastStep;           // last workflow step
   WorkflowStep *itsGroups;             // groups
@@ -336,6 +318,7 @@ protected :                            // protected members
   WorkflowStep *itsPopSteps;           // population steps
   WorkflowStep *itsDsnSteps;           // dsn steps
   WorkflowStep *itsPrompts;            // workflow prompts
+  WorkflowStep *itsTranslates;         // translate templates
 
   VariableList itsWfVars;              // workflow variables
   VariableList itsProdVars;            // product variables
@@ -344,25 +327,27 @@ protected :                            // protected members
 
   Variable  *itsAddTargets;            // targets to add/merge
 
-  CviStr itsPropertiesDsn;             // properties filename
-
   CviStr itsMasterXML;                 // master XML
   CviStr itsStepNames;                 // list of step names for dupe checking
 
+  CviStr itsWorkflowMem;               // workflow DSN name
+  CviStr itsPropertiesMem;             // properties DSN
+  CviStr itsPropertiesDSNList;         // properties filename
+  CviStr itsWorkflowDSN;               // workflow directory
+  CviStr itsTemplateDSNList;           // template DD list
+
   int    itsTempCount;                 // template count
   int    itsRealCount;                 // real template count (not includes, macros, etc.)
-
-  bool   itsReRun;                     // re-run mode
 
 protected:                             // protected members
      
   void  Reset();                       // reset
   
   int   CreateStep(CviStr &,           // create new step
-                   CviStr &theName); 
+                   const char *theName); 
 
-  int   BuildStep(CviStr &theMem,      // build step from member
-                  CviStr &theDSN);     // DSN to use
+  int   BuildStep(const char *theMember,  // build step from member
+                  const char *theDSN); // DSN to use
 
   int   AddStep(WorkflowStep **,       // add step
                 WorkflowStep *);       // to list, in order
@@ -377,13 +362,13 @@ protected:                             // protected members
 
   int   ParseTemplates();              // parse templates
 
+  int   ProcessTranslates();           // process TRANSLATE steps
+
   int   ProcessDSN();                  // process DSN steps
 
   int   ProcessPopulate(const char *thePrefix = ""); // process populate steps
 
   int   SizePopulate();                // size population entries
-
-  int   ProcessPromptGroup(JSON_Entry *);
 
   int   ProcessPrompts();              // process prompt templates
 
@@ -399,8 +384,6 @@ protected:                             // protected members
                    WorkflowStep *theGroup = NULL);
 
   int   GenerateDepWFs();              // generate deployment workflow XML members
-
-  int   GenerateReRun();               // generate items from re-run
 
   void  AddRowVars(Variable *theVar);  // add row variables
 
@@ -424,8 +407,6 @@ protected:                             // protected members
 
   int   ResolveUnixDSNs();             // resolve UNIX datasets
 
-  int   CleanupJCLOUT();               // cleanup JCL out
-
   bool  GetTracks(const char *thePrefix, // get track data, if it exists
                   const char *theDSN,
                   long &theTracks);
@@ -442,6 +423,8 @@ protected:                             // protected members
   int   ProcessDatasetList             // process dataset
             (WorkflowStep *);          // list
 
+  int   ProcessInput();                // process input commands
+
   virtual int Work(void);              // do work
 
   virtual int Init();                  // initialize program
@@ -449,8 +432,7 @@ protected:                             // protected members
 public    :                            // public stuff
 
   BuildWorkflow(int,                   // constructor
-                const char **,
-                bool);                 // re-run flag
+                const char **);        // command line parms
                                        
   int   RemoveMissingPrereqs();        // remove missing prerequisites
 

@@ -1,24 +1,7 @@
-/*
-
-  This program and the accompanying materials are
-
-  made available under the terms of the Eclipse Public License v2.0 which accompanies
-
-  this distribution, and is available at https://www.eclipse.org/legal/epl-v20.html
-
-  
-
-  SPDX-License-Identifier: EPL-2.0
-
-  
-
-  Copyright Contributors to the Zowe Project.
-
-*/
-
 //****************************************************************************
 // DESCRIPTION
 //         Provides a list of variables
+// 
 // 
 //****************************************************************************
 #include <stdio.h>                     // stdio
@@ -72,10 +55,29 @@ void Variable::SetVelocityScope(const char *theScope)
 
 void Variable::ReplaceWithVelocityName (CviStr &theStr)
 { 
-  theStr.Replace(itsName,
-                 itsVelocityName);
-  theStr.Replace(itsCondPropName,            
-                 itsVelocityCondName);
+
+  CviStr aVelName(itsVelocityName);     // check string
+  CviStr aVelCond(itsVelocityCondName); // check string
+
+  CviStr aName(itsName);               // copy name
+  CviStr aCond(itsCondPropName);       // copy conditional name
+
+  theStr.Replace(aName,                // replace regular name
+                 aVelName);
+  theStr.Replace(aCond,                // replace conditional name
+                 aVelCond);
+
+  aName.Replace("}", ".");             // replace brace with "." to catch 
+  aCond.Replace("}", ".");             // ${instance-Var.toUpperCase()} and other such uses 
+
+  aVelName.Replace("}", ".");          // replace brace with "." to catch 
+  aVelCond.Replace("}", ".");          // ${instance-Var.toUpperCase()} and other such uses 
+
+  theStr.Replace(aName,                // replace regular name
+                 aVelName);
+  theStr.Replace(aCond,                // replace conditional name
+                 aVelCond);
+
 }
 
 void Variable::AddSubVariable(Variable *theVar) 
@@ -284,14 +286,29 @@ itsName.Print("${%s}",                 // name to search
 itsCondPropName.Print("$!{%s}",        // name to search
                       theName);                
                                        
-itsVelocityName.Print                  // name to use when
-    ("${instance-%s}",                 // converting to Velocity
-     (const char *) itsPropName);
+if (strstr(theName, "-") != NULL)
+
+{
+
+    itsVelocityName.Set(itsName);
+    itsVelocityCondName.Set(itsCondPropName);
+
+}
+
+else
+
+{
+
+    itsVelocityName.Print              // name to use when
+        ("${instance-%s}",             // converting to Velocity
+         (const char *) itsPropName);
                                        
-itsVelocityCondName.Print              // name to use when
-    ("$!{instance-%s}",                // converting to Velocity
-     (const char *) itsPropName);
+    itsVelocityCondName.Print          // name to use when
+        ("$!{instance-%s}",            // converting to Velocity
+         (const char *) itsPropName);
                                        
+}
+
 itsHash = GenHash(theName);            // generate hash value
                                        
 }                                      
@@ -1079,7 +1096,8 @@ void VariableList::ReplaceWithVelocityNames  // translate to instance- names
                                        
 Variable *aVar = itsList;              // start of list
                                        
-if (strstr(theStr, "${") == NULL)      // if not found
+if (strstr(theStr, "${") == NULL    && // if no variables
+    strstr(theStr, "$!{") == NULL)     // found at all, do nothing
                                        
     aVar = NULL;                       // do nothing
                                        
@@ -1110,8 +1128,8 @@ void VariableList::ReplaceWithValues   // translate Velocity names to values
                                        
 {                                      // begin translate
                                        
-static CviStr aFind;                   // string to find
-static CviStr aVarName;                // variable name
+CviStr aFind;                          // string to find
+CviStr aVarName;                       // variable name
 
 
 const char *aVar = strstr(theStr, "$");
@@ -1274,17 +1292,6 @@ while (aVar != NULL)                   // for all variables
         if (aRepl)                     // if replacing is OK
         {
 
-            if (strlen(anEscaped) > 4 &&
-                strstr(aName, "DBC_ENV") != NULL)
-
-            {
-                printf("%s\n", (const char *) anEscaped);
-                printf("Ending: %s\n", ((const char *) anEscaped) + strlen(anEscaped) - 4);
-                printf("Next: %x(%c)\n\n",
-                       (int) *(aName + strlen(aFind)),
-                       *(aName + strlen(aFind)));
-
-            }
 
             if (strlen(anEscaped) > 4 &&
                 !strcmp(((const char *) anEscaped) + strlen(anEscaped) - 4,
@@ -1668,3 +1675,93 @@ return(aVar);                          // return result
 
 }
 
+
+//****************************************************************************
+//
+// Method       : SortByNumber
+//
+// Description  : Sorts variables based upon a subvariable value
+//
+// Parameters   : 1) Subvariable name to use
+//
+//****************************************************************************
+void VariableList::SortByNumber(const char *theSubVarName)
+{
+
+Variable *aNewList = NULL;             // new variable list
+
+Variable *aVar = itsList;              // grab head of current list
+
+while (aVar != NULL)                   // for all variables
+
+{                                      // begin sort
+
+    Variable *aNext = aVar->GetNext(); // get next
+
+    aVar->SetNext(NULL);               // no "NEXT" for now
+
+    Variable *aSubVar = aVar->FindSubVar(theSubVarName);
+
+    Variable *aNewVar = aNewList;      // grab head of new list
+    Variable *aInsVar = NULL;          // insert point
+
+    while (aNewVar != NULL)            // for all newly-ordered variables
+
+    {                                  // begin process variable
+
+        Variable *aNewSubVar = aNewVar->FindSubVar(theSubVarName);
+
+        if (aNewSubVar == NULL &&
+            aSubVar == NULL)
+
+            break;
+
+        if (aSubVar == NULL &&
+            aNewSubVar != NULL)
+
+            break;
+
+        if (aSubVar != NULL &&
+            aNewSubVar != NULL &&
+            atol(aSubVar->Value()) <=
+            atol(aNewSubVar->Value()))
+
+            break;
+
+        aInsVar = aNewVar;
+
+        aNewVar = aNewVar->GetNext();
+
+    };                                 // end process variable
+
+    if (aInsVar == NULL)
+    {
+        aVar->SetNext(aNewList);
+        aNewList = aVar;
+    }
+    else
+    {
+        aVar->SetNext(aInsVar->GetNext());
+        aInsVar->SetNext(aVar);
+    }
+
+    aVar = aNext;                      // process next item
+
+};                                     // end sort
+
+itsList = aNewList;                    // use new list
+
+aVar = itsList;
+while (aVar != NULL)
+{
+    Variable *aSubVar = aVar->FindSubVar(theSubVarName);
+    if (aSubVar != NULL)
+        GetTaskCviPgm()->Trace("Order %s  - ",
+                               (const char *) aSubVar->Value());
+
+    GetTaskCviPgm()->Trace("SORTED: %s\n",
+                           (const char *) aVar->itsName);
+    aVar = aVar->GetNext();
+}
+
+}

@@ -1,21 +1,3 @@
-/*
-
-  This program and the accompanying materials are
-
-  made available under the terms of the Eclipse Public License v2.0 which accompanies
-
-  this distribution, and is available at https://www.eclipse.org/legal/epl-v20.html
-
-  
-
-  SPDX-License-Identifier: EPL-2.0
-
-  
-
-  Copyright Contributors to the Zowe Project.
-
-*/
-
 //****************************************************************************
 // DESCRIPTION
 //         Makes z/OS calls
@@ -82,7 +64,7 @@ while (!aRc                         && // while not found yet and
                                        
 {                                      // begin walk TIOT
                                        
-    if (!memcmp(aTiot->tioeddnm,       // if debug DD
+    if (!memcmp(aTiot->tioeddnm,       // if DD name matches
                 theDD,
                 8))                
                                        
@@ -148,61 +130,6 @@ return(aRc);                           // return result
 
 }
 
-//****************************************************************************
-// CviOS - Varios OS functions
-//****************************************************************************
-void *CviOsLoad(const char *theMod)
-{
-
-  __register(0)  void* r0;             // entry point addr
-  __register(1)  int r1;               // reason code
-  __register(14) const char* r14;      // ptr to module name
-  __register(15) int r15;              // return code
-
-  void *aEp=NULL;
-
-  r14 = theMod;                        // set module name
-
-  __asm {
-    LOAD EPLOC=(14),ERRET=LOADE000     // load
-  }
-
-  if (r15 == 0)                        // if good
-
-    aEp = r0;                          // set EP
-
-  if (aEp == NULL)                     // if bad
-
-  {                                    // begin LOAD error
-
-__asm {
-LOADE000    DS  0H
-}
-
-      aEp = NULL;                      // return nothing
-
-  };                                   // end LOAD error
-
-  return aEp;                          // return EP
-
-};
-
-void CviOsDelete(const char *theMod)
-{
-  
-  __register(0)  void* r0;             // entry point addr
-  __register(1)  int r1;               // reason code
-  __register(14) const char* r14;      // ptr to module name
-  __register(15) int r15;              // return code
-
-  r14 = theMod;                        // set module name
-
-  __asm {
-    DELETE EPLOC=(14)                  // delete
-  }
-
-};
-
 
 /***************************************************************************
 
@@ -230,20 +157,15 @@ void  *theEcb
 
 {                                      // Begin Attach()
 
-__register (8) void  *aModule;         // use R8 for task entry point
-__register (7) void  *aEcb = theEcb;   // ECB
-__register (6) void  *aCall = theCall;
+void  *aModule;                        // use R8 for task entry point
+void  *aEcb = theEcb;                  // ECB
 
-void *aPtr;
-
-__register (1) void  *r_c;             // return code holder
-__register (0) long  r0;               // uses r0
-__register (14) long  r14;             // uses r14
-__register (15) long  r15;             // uses r15
+void *aPtr = NULL;                     // returned TCB address
+void **aPtrReg = &aPtr;                // pointer for register access
 
 char    AttachParms[1024];             // attach parms
 
-__register (9) char *aR9 = AttachParms;
+char *aAP = AttachParms;
 
 aEcb = (void *)(((unsigned int )theEcb) & 0x7fffffff);
 
@@ -257,25 +179,22 @@ sprintf(aEp, "CVIEP%03d", aCount ++);
 
 aModule = aEp;
 
-__asm
+__asm__("   IDENTIFY EPLOC=(%1),ENTRY=(%0)\n"
+        "   LR %0,15\n"
+        :
+        :"r"(theCall),
+         "r"(aModule)
+        :"r0","r1","r14","r15");
 
-{
-    IDENTIFY EPLOC=(8),ENTRY=(6)
-}
-
-r_c = (char *) theParms;               // set parameters
-
-__asm
-
-{
-    ATTACHX EPLOC=(8),ECB=(7),SF=(E,(9))
-}
-
-aPtr = r_c;
-
-//printf("Attached %p at %s as %p\n", aCall, aModule, aPtr);
-
-
+__asm__("   LR 1,%4\n"
+        "   ATTACHX EPLOC=(%2),ECB=(%1),SF=(E,(%3))\n"
+        "   LR %0,1\n"
+        :"+r"(aPtr)
+        :"r"(aEcb),
+         "r"(aModule),
+         "r"(aAP),
+         "r"(theParms)
+        :"r0","r1","r14","r15");
 
 return((void *) aPtr);                 // return attach result
 
@@ -308,20 +227,15 @@ void  *theEcb
 
 {                                      // Begin Attach()
 
-__register (8) void  *aModule;         // use R8 for task entry point
-__register (7) void  *aEcb = theEcb;   // ECB
-__register (6) void  *aCall = theCall;
+void  *aModule;                        // use R8 for task entry point
+void  *aEcb = theEcb;                  // ECB
 
-void *aPtr;
-
-__register (1) void  *r_c;             // return code holder
-__register (0) long  r0;               // uses r0
-__register (14) long  r14;             // uses r14
-__register (15) long  r15;             // uses r15
+void *aPtr = NULL;                     // returned TCB address
+void **aPtrReg = &aPtr;                // pointer for register access
 
 char    AttachParms[1024];             // attach parms
 
-__register (9) char *aR9 = AttachParms;
+char *aAP = AttachParms;
 
 aEcb = (void *)(((unsigned int )theEcb) & 0x7fffffff);
 
@@ -335,25 +249,22 @@ sprintf(aEp, "CVIEP%03d", aCount ++);
 
 aModule = aEp;
 
-__asm
+__asm__("   IDENTIFY EPLOC=(%1),ENTRY=(%0)\n"
+        "   LR %0,15\n"
+        :
+        :"r"(theCall),
+         "r"(aModule)
+        :"r0","r1","r14","r15");
 
-{
-    IDENTIFY EPLOC=(8),ENTRY=(6)
-}
-
-r_c = (char *) theParms;               // set parameters
-
-__asm
-
-{
-    ATTACHX EPLOC=(8),ECB=(7),JSTCB=YES,SF=(E,(9))
-}
-
-aPtr = r_c;
-
-//printf("Attached %p at %s as %p\n", aCall, aModule, aPtr);
-
-
+__asm__("   LR 1,%4\n"
+        "   ATTACHX EPLOC=(%2),ECB=(%1),JSTCB=YES,SF=(E,(%3))\n"
+        "   LR %0,1\n"
+        :"+r"(aPtr)
+        :"r"(aEcb),
+         "r"(aModule),
+         "r"(aAP),
+         "r"(theParms)
+        :"r0","r1","r14","r15");
 
 return((void *) aPtr);                 // return attach result
 
@@ -381,11 +292,7 @@ void  *theTcb                          // TCB
 
 {                                      // Begin Detach()
 
-__register (0) long  r0;               // uses r0
-__register (1) long  r1;               // uses r1
-__register (7) unsigned int   *aTcb;   
-__register (14) long  r14;             // uses r14
-__register (15) long  r15;             // uses r15
+   unsigned int   *aTcb;               // TCB address
 
    unsigned int aTcbInt;               // TCB
 
@@ -395,13 +302,11 @@ __register (15) long  r15;             // uses r15
 
    aTcb = &aTcbInt;                    // set TCB 
 
-   __asm
 
-   {
-
-        DETACH (7),STAE=NO
-
-   }
+   __asm__("   DETACH (%0),STAE=NO\n"
+        :
+        :"r"(aTcb)
+        :"r0","r1","r14","r15");
 
 }                                      // End Detach()
 
@@ -429,11 +334,7 @@ struct timeval *theTimeout             // timeout
 
 {                                      // Begin WaitEcb()
 
-__register (0)  long  r0;              // uses r0
-__register (1)  long  r1;              // uses r1
-__register (2)  void *aEcb = theEcb;
-__register (14) long  r14;             // uses r14
-__register (15) long  r15;             // uses r15
+void *aEcb = theEcb;
 
 
 aEcb = (void *)(((unsigned int )theEcb) & 0x7fffffff);
@@ -443,13 +344,11 @@ if (theTimeout == NULL)                // if no timeout
 
 {                                      // begin WAIT
 
-__asm
 
-{
-
-   WAIT ECB=(2)
-
-}
+   __asm__("   WAIT ECB=(%0)\n"
+           :
+           :"r"(aEcb)
+           :"r0","r1","r14","r15");
 
 }                                      // end WAIT
 
@@ -477,20 +376,18 @@ else                                   // otherwise
     aParms[11] = &aErrNo;              // errno
     aParms[12] = (void *) CVIOS_HOBON(&aErrRsn);
 
-    void  __register(1)  **aParmList = aParms;
-    int   __register(14)  aR14;
-    int   __register(15)  aRc;
+    void **aParmList = aParms;
 
-__asm 
-{
-
-    L 15,16(0)                         CVT
-    L 15,544(15)                       CSRTABLE
-    L 15,24(15)                        SS CSR slots
-    L 15,552(15)                       BPX1SEL
-    CALL (15)                          CALL
-
-}
+    __asm__(
+"    LR 1,%0\n"
+"    L 15,16(0)                         CVT\n"
+"    L 15,544(15)                       CSRTABLE\n"
+"    L 15,24(15)                        SS CSR slots\n"
+"    L 15,552(15)                       BPX1SEL\n"
+"    CALL (15)                          CALL\n"
+    :
+    :"r"(aParmList)
+    :"r0","r1","r14","r15");
 
 };                                     // end SELECTEX
 
@@ -517,161 +414,18 @@ void  *theEcb
 
 {                                      // Begin CviPost()
 
-__register (0)  long  r0;              // uses r0
-__register (1)  long  r1;              // uses r1
-__register (2)  void *aEcb = theEcb;
-__register (14) long  r14;             // uses r14
-__register (15) long  r15;             // uses r15
+void *aEcb = theEcb;                   
 
 
 aEcb = (void *)(((unsigned int )theEcb) & 0x7fffffff);
 
 
-__asm
-
-{
-
-   POST (2)
-
-}
+  __asm__("   POST (%0)\n"
+          :
+          :"r"(aEcb)
+          :"r0","r1","r14","r15");
 
 }                                      // End CviPost()
-
-/***************************************************************************
-
-    Function    : CviSleep
-
-    Description : Wait for x seconds
-
-    Parameters  : 1) Time to wait in seconds
-                  2) Optional ECB to wait upon
-                  
-    Return      : 0 - Time expired, no ECB
-                  1 - ECB posted
-
-***************************************************************************/
-int CviSleep(int theTime, int *theEcb)
-{
-  __register(0) unsigned int r0;       // used by macro 
-  __register(1) unsigned int r1;       // used by macro 
-  __register(14) int* r14;             // used by macro 
-  __register(15) unsigned int r15;     // used by macro 
-
-  struct timeval aTimeout;             // timeout
-
-  void  *aParms[16];                   // parms
-  int   theZero = 0;                   // zero parm
-  int   iTime = *(int *)(theTime);     // get actual time
-  void *theTimeout = &aTimeout;        // timeout
-  int   theErr = 0;                    // error code
-  int   theErrNo = 0;                  // errno
-  int   theErrRsn = 0;                 // error reason
-  int   aRc = 0;                       // return code
-
-  if (theEcb == NULL)                  // if no ECB
-
-  {                                    // begin use stimer
-
-      r14 = &iTime;                    // set timer addr 
-
-      iTime = iTime * 100;             // convert into hundredths
-
-      __asm                            // begin call STIMER
-      {
-        STIMER WAIT,BINTVL=(14)        
-      }                                // end call STIMER
-
-      aRc = 0;                         // time expired
-
-  }
-
-  else                                 // otherwise
-
-  {                                    // begin SELECTEX
-
-    theEcb = (int *)CVIOS_HOBOFF(theEcb);
-
-    aTimeout.tv_sec = iTime;           // set timeout in seconds
-    aTimeout.tv_usec = 0;              // no microseconds
-
-    aParms[0] = &theZero;              // no sockets
-    aParms[1] = &theZero;              // no read
-    aParms[2] = &theZero;              // list
-    aParms[3] = &theZero;              // no write
-    aParms[4] = &theZero;              // list
-    aParms[5] = &theZero;              // no state
-    aParms[6] = &theZero;              // list
-    aParms[7] = &theTimeout;           // timeout
-    aParms[8] = &theEcb;               // ECB
-    aParms[9] = &theZero;              // format doesn't matter
-    
-    aParms[10] = &theErr;                  // parm 11
-    aParms[11] = &theErrNo;                // parm 12
-    aParms[12] = (void *) CVIOS_HOBON(&theErrRsn);
-
-    void  __register(1)  **aParmList = aParms;
-
-    __asm {
-
-        L 15,16(0)                     
-        L 15,544(15)                   
-        L 15,24(15)                    
-        L 15,552(15)                   
-
-        CALL (15)                      
-
-    }                                  
-
-    if (*theEcb != 0)                  // if ECB posted
-
-        aRc = 1;                       // say so
-
-    else                               // otherwise
-
-        aRc = 0;                       // timeout
-
-  };                                   // end SELECTEX
-
-  return(aRc);                         // return result
-
-}
-
-/***************************************************************************
-
-    Function    : CviHSleep
-
-    Description : Wait for x hundreths of a second
-
-    Parameters  : 1) Time to wait in hundredeths
-                  2) Optional ECB to wait upon
-                  
-    Return      : 0 - Time expired, no ECB
-                  1 - ECB posted
-
-***************************************************************************/
-int CviHSleep(int theTime)
-{
-  __register(0) unsigned int r0;       // used by macro 
-  __register(1) unsigned int r1;       // used by macro 
-  __register(14) int* r14;             // used by macro 
-  __register(15) unsigned int r15;     // used by macro 
-
-  int   iTime = *(int *)(theTime);     // get actual time
-  int   aRc = 0;                       // return code
-
-  r14 = &iTime;                        // set timer addr 
-                                       
-  __asm                                // begin call STIMER
-  {                                    
-    STIMER WAIT,BINTVL=(14)            
-  }                                    // end call STIMER
-                                       
-  aRc = 0;                             // time expired
-
-
-  return(aRc);                         // return result
-
-}
 
 /***************************************************************************
 
@@ -713,481 +467,34 @@ while (thePtr != theName &&
 
 /***************************************************************************
 
-    Function    : CviOsCreateNT
+    Function    : CviHSleep
 
-    Description : Set name token
+    Description : Wait for x hundreths of a second
 
-    Parameters  : 1) Token name
-                  2) Token value
-                  3) Level (default - SYSTEM)
-
-    Returns     : NONE
-
-***************************************************************************/
-
-int CviOsCreateNt
-
-(                                      // Begin Define Function Parameters
-
-const char  * theName,                 // token name
-int64_t *theValue,                     // token value
-int     theLevel                       // level
-
-)                                      // End Define Function Parameters
-
-{                                      // Begin CviOsCreateNT()
-
-long  r_c = 0;                         // OK so far
-
-
-typedef int (* __ptr31 IeaNtCr) (void);
-__register(7) void * aOldR1;
-__register(1) void * aR1 = (void *) &theName;
-__register (15) IeaNtCr aSvc = 0;
-
-#pragma pack(4)
-struct SvcParms
-{
-   const int  * __ptr31 itsLevel;
-         char * __ptr31 itsName;
-    int64_t   * __ptr31 itsValue;
-         int  * __ptr31 itsOptions;
-         int  * __ptr31 itsRc;
-
-    int  theLevel;
-    char theName[16];
-    int64_t theValue;
-    int  theOptions;
-    int  theRc;
-};
-
-struct SvcParms aParm;
-
-aParm.theLevel = *(int *) theLevel;    // level to use
-aParm.theValue = *theValue;            // value to set
-aParm.theOptions = 0;                  
-
-memcpy(aParm.theName, theName, 16);
-aParm.itsLevel = (const int * __ptr31) &aParm.theLevel;
-aParm.itsName = (char * __ptr31) &aParm.theName;
-aParm.itsOptions = (int * __ptr31) &aParm.theOptions;
-aParm.itsValue = (long long * __ptr31) &aParm.theValue;
-aParm.itsRc = (int * __ptr31) &aParm.theRc;
-
-
-aOldR1 = aR1;
-
-aR1 = (void *) &aParm;
-
-#ifdef _LP64
-__asm
-{
-   sam31
-}
-#endif
-
-__asm
-{
-   L     15,16(0,0)                    // Get the CVT
-   L     15,544(0,15)                  // then
-   L     15,20(0,15)                   // get the routine
-   L     15,4(0,15)                    // address
-
-   BALR 14,15
-
-}
-
-//aSvc();
-
-
-#ifdef _LP64
-__asm
-{
-   sam64
-}
-#endif
-
-aR1 = aOldR1;
-
-r_c = aParm.theRc;
-
-#pragma pack(reset)
-
-
-
-return(r_c);
-
-}                                      // CviOsCreateNT()
-
-/***************************************************************************
-
-    Function    : CviOsGetNT
-
-    Description : Get token. 
-
-    Parameters  : 1) Token name
-                  2) Token value
-                  3) Level
-
-    Returns     : NONE
+    Parameters  : 1) Time to wait in hundredeths
+                  2) Optional ECB to wait upon
+                  
+    Return      : 0 - Time expired, no ECB
+                  1 - ECB posted
 
 ***************************************************************************/
-
-int CviOsGetNt
-
-(                                      // Begin Define Function Parameters
-
-const char  * theName,                 // token name
-int64_t *theValue,                     // token value
-int     theLevel                       // level
-
-)                                      // End Define Function Parameters
-
-{                                      // Begin CviOsGetNT()
-
-long  r_c = 0;                         // OK so far
-
-typedef int (* __ptr31 IeaNtRt) (void);
-
-__register(8) void * aOldR1;
-__register(1) void * aR1;
-__register(15) IeaNtRt aSvc = 0;
-
-#pragma pack(4)
-struct SvcParms
-{
-   const int  * __ptr31 itsLevel;
-         char * __ptr31 itsName;
-    int64_t   * __ptr31 itsValue;
-         int  * __ptr31 itsRc;
-
-    int  theLevel;
-    char theName[16];
-    int64_t theValue;
-    int  theRc;
-};
-
-typedef struct SvcParms SvcParms;
-
-SvcParms *aParm;                       // parameter pointer
-SvcParms aParmBlk;                     // parameter block
-#ifdef _LP64
-if ((unsigned long) &aParmBlk >        // if
-      0xffffffff)                      // memory is above bar
-   aParm = (SvcParms *) __malloc31(sizeof(SvcParms));
-else                                   // otherwise
-   aParm = &aParmBlk;
-#else
-   aParm = &aParmBlk;
-#endif
-
-aParm->theLevel = *(int *) theLevel;    // level to use
-
-memcpy(aParm->theName, theName, 16);
-aParm->itsLevel = (const int * __ptr31) &aParm->theLevel;
-aParm->itsName = (char * __ptr31) &aParm->theName;
-aParm->itsValue = (long long * __ptr31) &aParm->theValue;
-aParm->itsRc = (int * __ptr31) &aParm->theRc;
-
-aR1 = (void *) &theName;
-
-aOldR1 = aR1;
-aR1 = (void *) aParm;
-
-aSvc = 0;
-
-#ifdef _LP64
-__asm
-{
-   sam31
-}
-#endif
-
-__asm
-{
-   L     15,16(0,0)                    // Get the CVT
-   L     15,544(0,15)                  // then
-   L     15,20(0,15)                   // get the routine
-   L     15,8(0,15)                    // address
-   BALR 14,15
-}
-
-//aSvc();
-
-#ifdef _LP64
-__asm
-{
-   sam64
-}
-#endif
-
-aR1 = aOldR1;
-
-*theValue = aParm->theValue;
-
-r_c = aParm->theRc;
-
-#pragma pack(reset)
-
-
-#ifdef _LP64
-if ((unsigned long) &aParmBlk >        // if
-      0xffffffff)                      // memory is above bar
-   __free31((void *) aParm);
-#endif
-
-
-return(r_c);                           // return our result
-
-}                                      // End CviOsGetNT()
-
-/***************************************************************************
-
-    Function    : CviOsDeleteNT
-
-    Description : Delete token.  This is NOT intended for public consumption.
-
-    Parameters  : 1) Token name
-                  2) Level
-
-    Returns     : NONE
-
-***************************************************************************/
-int  CviOsDeleteNt
-
-(                                      // Begin Define Function Parameters
-
-const char  *theName,                  // token name
-int     theLevel                       // level
-
-)                                      // End Define Function Parameters
-
-{                                      // Begin CviOsDeleteNT()
-
-long  r_c = 0;                         // OK so far
-
-typedef int (* __ptr31 IeaNtRt) (void);
-
-__register(8) void * aOldR1;
-__register(1) void * aR1;
-__register(15) IeaNtRt aSvc = 0;
-
-
-#pragma pack(4)
-struct SvcParms
-{
-   const int  * __ptr31 itsLevel;
-         char * __ptr31 itsName;
-         int  * __ptr31 itsRc;
-
-    int  theLevel;
-    char theName[16];
-    int  theRc;
-};
-
-struct SvcParms aParm;
-
-aParm.theLevel = *(int *) theLevel;    // level to use
-
-memcpy(aParm.theName, theName, 16);
-
-aParm.itsLevel = (const int * __ptr31) &aParm.theLevel;
-aParm.itsName = (char * __ptr31) &aParm.theName;
-aParm.itsRc = (int * __ptr31) &aParm.theRc;
-
-aR1 = (void *) &theName;
-
-aOldR1 = aR1;
-aR1 = (void *) &aParm;
-
-#ifdef _LP64
-__asm
-{
-   sam31
-}
-#endif
-
-__asm
-{
-   L     15,16(0,0)                    // Get the CVT
-   L     15,544(0,15)                  // then
-   L     15,20(0,15)                   // get the routine
-   L     15,12(0,15)                   // address
-   BALR 14,15
-}
-
-//aSvc();
-
-
-#ifdef _LP64
-__asm
-{
-   sam64
-}
-#endif
-
-aR1 = aOldR1;
-
-r_c = aParm.theRc;
-
-#pragma pack(reset)
-
-return(r_c);                           // return our result
-
-}                                      // End CviOsDeleteNT()
-
-/***************************************************************************
-
-    Function    : CviOsSetCdeName
-
-    Description : Sets CDENAME
-
-    Parameters  : 1) Name to use
-
-***************************************************************************/
-void CviOsSetCdeName(const char *theName)
-
+int CviHSleep(int theTime)
 {
 
+  int   iTime = *(int *)(theTime);     // get actual time
+  int   aRc = 0;                       // return code
 
-struct psa *psPsa = 0;                 // PSA
-
-int ourTcb  = (int) psPsa->psatold;    // get TCB address
-
-tcbfix *aTcb = (tcbfix *)              // get TCB prefix address 
-    ((char *) psPsa->psatold - 32);    
-
-if ((int) ourTcb !=                    // if we are NOT
-     (int) aTcb->tcbjstcb)             // the JSTCB
-
-    return;                            // get out of here!
-
-
-__register(0)  void* r0;               // entry point addr
-__register(1)  int r1;                 // reason code
-__register(14) const char* r14;        // ptr to module name
-__register(15) int r15;                // return code
-
-__register(5)  const char *r5;         // R5 - name
-
-char    aTaskName[9];                  // task name    
+  int   *aTimePtr = &iTime;            // set timer addr 
                                        
-sprintf(aTaskName,                     // set task name
-        "%-8.8s",                      // to   
-        CVIOS_HOBOFF(theName));        // command name
+  __asm__("  STIMER WAIT,BINTVL=(14)\n"
+          :
+          :"r"(aTimePtr)
+          :"r0","r1","r14","r15");
+            
+  aRc = 0;                             // time expired
 
-r5 = aTaskName;                        // grab task name
-                                       
 
-__register(6)  int r6;                 // R6 will be used
-
-__asm {
-
-*
-* FIND THE PRB FOR OUR TASK, THEN FIND OUR CDE
-*
-         USING PSA,0                   MAP PSA
-         L     6,PSATOLD               GET CURRENT TCB
-         USING TCB,6                   MAP TCB
-         L     6,TCBRBP                GET ADDRESS OF LAST RB
-         DROP  6                       NO MORE NEED OF TCB
-         SH    6,=Y(RBBASIC-RBPRFX)    POINT TO PREFIX
-         USING RBPRFX,6                MAP RB PREFIX
-         SPACE 1
-RBLOOP1  DS    0H
-         SPACE 1
-         CLC   RBLINKB,PSATOLD+1       TOP RB?
-         BE    TOPRB1                  YES - BRANCH
-         L     6,RBLINK                NO - GET PREVIOUS RB
-         SLL   6,8                     CLEAR HIGH ORDER BYTE
-         SRL   6,8
-         SH    6,=Y(RBBASIC-RBPRFX)    POINT TO PREFIX
-         B     RBLOOP1                 FIND TOP RB
-         SPACE 1
-TOPRB1   DS    0H
-         SPACE 1
-         L     6,RBCDE                 GET ADDRESS OF DBC2MAIN CDE
-         DROP  6                       NO MORE NEED OF RB
-*
-* REPLACE THE MODULE NAME IN OUR CDE WITH THE NAME OF THE FUNCTION
-* OR MODULE TO BE GIVEN CONTROL
-*
-         USING CDENTRY,6               MAP CDE
-         SPACE 1
-         MODESET KEY=ZERO              TO MODIFY CDE
-         SPACE 1
-         MVC   CDNAME,0(5)             SET TARGET NAME
-         DROP  6                       NO MORE NEED OF CDE
-         SPACE 1
-         MODESET KEY=NZERO             BACK TO NORMAL
-         SPACE 1
-                                       
-}
+  return(aRc);                         // return result
 
 }
 
-//****************************************************************************
-// CviOsStckTime - Convert STCK to microseconds
-//****************************************************************************
-uint64_t CviOsStckTime(uint64_t *theTime)
-{
-
-  __register(0)  void* r0;             // entry point addr
-  __register(1)  int r1;               // reason code
-  __register(2)  uint64_t *aTime;      // STCK address
-  __register(3)  unsigned char *aStr;  // string output
-  __register(10) char *r10;            // parms
-  __register(14) const char* r14;      // ptr to module name
-  __register(15) int r15;              // return code
-
-
-  char  ParmBlk[64];                   // parm block
-
-  unsigned char aBuf[16];              // output buffer
-
-  aTime = theTime;                     // set time into register
-  aStr = aBuf;                         // set microsecond return to register
-  r10 = ParmBlk;                       // parm block
-
-  __asm {
-    STCKCONV STCKVAL=(2),CONVVAL=(3),TIMETYPE=BIN,                     x
-               DATETYPE=YYYYMMDD,MF=(E,(10))
-  }
-
-  unsigned int *aVal = (unsigned int *) aStr;
-
-  return((uint64_t) *aVal);
-
-}
-
-
-/***************************************************************************
-
-    Function    : CviOsTime
-
-    Description : Gets current time in seconds
-
-    Parameters  : NONE
-
-    Returns     : Current time in seconds
-
-***************************************************************************/
-int64_t  CviOsTime()
-{
-
-return(time(NULL));                    // return current time
-
-}
-
-__asm {
-
-    SPACE 1
-    IHAPSA
-    SPACE 1
-    IKJTCB
-    SPACE 1
-    IHACDE
-    SPACE 1
-    IHARB
-
-}

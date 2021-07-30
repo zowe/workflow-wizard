@@ -1,21 +1,3 @@
-/*
-
-  This program and the accompanying materials are
-
-  made available under the terms of the Eclipse Public License v2.0 which accompanies
-
-  this distribution, and is available at https://www.eclipse.org/legal/epl-v20.html
-
-  
-
-  SPDX-License-Identifier: EPL-2.0
-
-  
-
-  Copyright Contributors to the Zowe Project.
-
-*/
-
 //****************************************************************************
 // DESCRIPTION
 //         Utility to build a workflow based upon a template
@@ -33,10 +15,12 @@
 //
 //****************************************************************************
 
+#define _EXT
+#include <dynit.h>                     // dynamic allocation
 #include <stdio.h>                     // stdio
 #include <string.h>                    // string
 #include <stdlib.h>                    // stdlib
-#include <machine/atoe.h>              // EBCDIC <-> ASCII
+#include <ctype.h>                     // c types
 #include <dirent.h>                    // list directory
 
 #include "CviBuildWorkflow.h"          // workflow program class
@@ -47,24 +31,7 @@
 #include "CviDefs.h"                   // include defines
 #include "CviStr.h"                    // include string
 
-#include "MemberListProperties.h"      // member list properties
-#include "MemberList.h"                // member list
-
-
-#include "CatSearchIFace.h"            // catalog search
-
-#include "osLocate.h"                  // osLocate
-
-#include "memman.h"                    // include memman
-                                                        
-//extern int CviStr_ReallocCount;
-
-//****************************************************************************
-// 
-// memman flags
-//
-//****************************************************************************
-ubyte4 NoServiceDll = 1;
+#include "CviMemberList.h"             // include member list
 
 //****************************************************************************
 // 
@@ -79,16 +46,18 @@ ubyte4 NoServiceDll = 1;
 //****************************************************************************
 // Trace macros to improve efficiency
 //****************************************************************************
-static CviPgm *aTrcPgm = NULL;
+CviPgm *aTrcPgm = NULL;
 #define TRACE(s,...) \
   if (aTrcPgm != NULL) \
    { aTrcPgm->Trace(s, ##__VA_ARGS__); } else 
 
 //****************************************************************************
-// Read buffering
+// I/O Stuff
 //****************************************************************************
 #define READ_BUF_SIZE 65536
 #define READ_LOW_SIZE 256
+
+#define FOPEN_RMODE "r,recfm=FB,lrecl=133,blksize=133"
 
 //****************************************************************************
 // TCBs for getting member info on datasets
@@ -105,15 +74,12 @@ static CviPgm *aTrcPgm = NULL;
 //****************************************************************************
 // Shameless globals
 //****************************************************************************
-static char itsDevPrint = false;       // assume devprint not on
-static char itsGenJobname = true;      // generate job names
-static char itsGenOnly = false;        // generate, rather than submit, jobs?
-static char itsGenMembers = false;     // generate JCL members
-static char itsCombineSteps = true;    // assume combining steps is OK
-static char itsUsePrompts = false;      // we are using prompts
-static CviStr itsJclOut("//DD:JCLOUT");// JCL output 
+char itsDevPrint = false;       // assume devprint not on
+char itsGenJobname = true;      // generate job names
+char itsGenOnly = false;        // generate, rather than submit, jobs?
+char itsCombineSteps = true;    // assume combining steps is OK
 
-static WorkflowStep *aPrev = NULL;     // previous step holder
+WorkflowStep *aPrev = NULL;     // previous step holder
 
 
 //****************************************************************************
@@ -124,744 +90,15 @@ static WorkflowStep *aPrev = NULL;     // previous step holder
                       aPgm->DevPrint(##__VA_ARGS__); }; }
                       
 
-
-
-
-
-
-
-//
-//
-// Temporary proof-of-concept stuff using JSON parser from PSI Customizer
-//
-//
-
-class JSON_Entry
-
-{
-
-public:
-
-    CviStr itsName;
-
-    char itsType;
-
-    JSON_Entry *itsNext;
-    JSON_Entry *itsChild;
-    JSON_Entry *itsValue;
-
-
-public:
-
-    JSON_Entry(const char *theName,
-               const char *theValue = NULL,
-               char theType = 0)
-
-    {
-        itsName.Set(theName);
-        itsNext = NULL;
-        itsChild = NULL;
-        if (theValue != NULL)
-            itsValue = new JSON_Entry(theValue);
-        else
-            itsValue = NULL;
-        itsType = theType;
-
-    }
-
-    JSON_Entry *AddChild(JSON_Entry *theChild)
-    {
-
-        if (!strcmp(theChild->itsName,
-                    "(top)"))
-        {
-            theChild = theChild->itsChild;
-
-            if (theChild->itsType == 0 &&
-               itsChild != NULL)
-                theChild->itsType = itsChild->itsType;
-        };
-
-        if (itsChild == NULL)
-        {
-            itsChild = theChild;
-        }
-        else
-            itsChild->AddSibling(theChild);
-        return(theChild);
-    }
-
-    JSON_Entry *AddSibling(JSON_Entry *theSib)
-    {
-
-        if (itsNext == NULL)
-        {
-            itsNext = theSib;
-//            theSib->itsName.Add(" - via AddSibling");
-        }
-        else
-            itsNext->AddSibling(theSib);
-        return(theSib);
-    }
-
-    JSON_Entry *AddValue(JSON_Entry *theValue)
-    {
-
-        if (itsValue == NULL)
-        {
-//            theValue->itsName.Add(" - via AddValue");
-            itsValue = theValue;
-        }
-        else
-            itsValue->AddValue(theValue);
-        return(theValue);
-    }
-
-    void SetName(const char *theName)
-    {
-        itsName.Set(theName);
-    }
-
-    const char *GetName()
-    {
-        return (const char *) itsName;
-    }
-
-    const char *GetValue()
-    {
-        if (itsValue != NULL &&
-            itsType != 'N')
-            return((const char *) itsValue->itsName);
-        else
-            return(NULL);
-    }
-
-    void SetValue(const char *theValue)
-    {
-
-        itsType = 0;
-
-        if (theValue == NULL &&
-            itsValue != NULL)
-
-        {
-            delete itsValue;
-            itsValue = NULL;
-            itsType = 'N';
-        }
-
-        else
-
-        if (theValue != NULL &&
-            itsValue != NULL)
-            
-            itsValue->itsName.Set(theValue);
-
-        else
-
-        {
-
-            itsValue = new JSON_Entry(theValue);
-
-        }
-    }
-
-    void SetType(char theType)
-    {
-        itsType = theType;
-    }
-
-    JSON_Entry *GetEntry()
-    {
-        return(itsValue);
-    }
-
-    JSON_Entry *GetChild()
-    {
-        return(itsChild);
-    }
-
-    JSON_Entry *GetSibling()
-    {
-        return(itsNext);
-    }
-
-    JSON_Entry *FindEntry(const char *theName,
-                          bool theNullOk = true)
-
-    {
-
-        JSON_Entry *aRc = NULL;
-
-        if ((theNullOk ||
-             itsType != 'N') &&
-            !strcmp(itsName, theName))
-            aRc = this;
-        else
-        {
-            if (itsChild != NULL)
-                aRc = itsChild->FindEntry(theName, theNullOk);
-            if (aRc == NULL &&
-                itsNext != NULL)
-                aRc = itsNext->FindEntry(theName, theNullOk);
-        }
-
-        return(aRc);
-
-    }
-
-    JSON_Entry *FindChild(const char *theName,
-                          bool theNullOk = true)
-
-    {
-
-        JSON_Entry *aRc = NULL;
-
-        if ((theNullOk ||
-             itsType != 'N') &&
-            !strcmp(itsName, theName))
-            aRc = this;
-        else
-        {
-            if (itsChild != NULL)
-                aRc = itsChild->FindEntry(theName, theNullOk);
-        }
-
-        return(aRc);
-
-    }
-
-
-    JSON_Entry *FindEntryEndsWith(const char *theName, const char *theValue)
-
-    {
-
-        JSON_Entry *aRc = NULL;
-
-        const char *aValue = GetValue();
-
-        if (!strcmp(theName, itsName) &&
-            aValue != NULL &&
-            strlen(aValue) >= strlen(theValue) &&
-            !strcmp(aValue + strlen(aValue) - strlen(theValue),
-                    theValue))
-            aRc = this;
-        else
-        {
-            if (itsChild != NULL)
-                aRc = itsChild->FindEntryEndsWith(theName, theValue);
-            if (aRc == NULL &&
-                itsNext != NULL)
-                aRc = itsNext->FindEntryEndsWith(theName, theValue);
-        }
-
-        return(aRc);
-
-    }
-
-
-    JSON_Entry *FindEntry(const char *theName,
-                          const char *theValue)
-
-    {
-
-        JSON_Entry *aRc = NULL;
-
-        const char *aValue = GetValue();
-        const char *aName = GetName();
-
-        if (aValue != NULL &&
-            !strcmp(theName, aName) &&
-            !strcmp(theValue, aValue))
-            aRc = this;
-        else
-        {
-            if (itsChild != NULL)
-                aRc = itsChild->FindEntry(theName, theValue);
-            if (aRc == NULL &&
-                itsNext != NULL)
-                aRc = itsNext->FindEntry(theName, theValue);
-        }
-
-        return(aRc);
-
-    }
-
-    void Walk(CviStr &theStr,
-              int theLevel = 0)
-
-    {
-
-        if (theLevel == 0 &&
-            !strcmp(itsName, "(top)"))
-
-        {
-            if (itsChild != NULL)
-            {
-                itsChild->Walk(theStr, theLevel+1);
-                return;
-            }
-        }
-
-// Don't beautify things
-        theLevel = 0;
-
-
-        if (strlen(itsName) > 0)
-
-            theStr.Print("%*.*s\"%s\"",
-                   theLevel*2,
-                   theLevel*2,
-                   " ",
-                   (const char *) itsName);
-
-        if (itsType != 0 &&
-            itsType != 'N' &&
-            itsType != 'T' &&
-            itsType != 'F')
-
-
-        {
-
-            if (strlen(itsName) == 0)
-
-                theStr.Print("%*.*s%c\n",
-                       theLevel*2,
-                       theLevel*2,
-                       " ",
-                       itsType);
-
-            else
-
-                theStr.Print(":%c\n",
-                       itsType);
-
-        }
-
-        else
-
-        if (strlen(itsName) != 0)
-                
-            theStr.Print(":");
-
-        JSON_Entry *aValue = itsValue;
-
-        while (aValue != NULL ||
-               itsType == 'N' ||
-               itsType == 'T' ||
-               itsType == 'F')
-
-        {
-
-            if (strlen(itsName) == 0 ||
-                (itsType == '{' || itsType == '['))
-
-                theStr.Print("%*.*s",
-                       (theLevel)*2,
-                       (theLevel)*2,
-                       " ");
-            
-            if (aValue != NULL)
-
-            {
-
-                theStr.Print("\"%s\"",
-                       (const char *) aValue->itsName);
-
-                aValue = aValue->itsValue;
-
-                if (aValue != NULL)
-
-                    theStr.Print(",\n");
-
-                else
-
-                if (itsType == '[')
-
-                    theStr.Print("\n");
-
-            }
-
-            else
-
-            {
-
-                if (itsType == 'T')
-                    theStr.Print("true");
-                if (itsType == 'F')
-                    theStr.Print("false");
-                if (itsType == 'N')
-                    theStr.Print("null");
-
-                break;
-
-            }
-
-        }
-
-        if (itsChild != NULL)
-            itsChild->Walk(theStr, theLevel+1);
-
-        if (itsType != 0 && itsType != 'N')
-
-        {
-
-             theStr.Print("%*.*s",
-                    theLevel*2,
-                    theLevel*2,
-                    " ");
-
-            char aType = 0;
-
-            if (itsType == '[')
-                aType = ']';
-
-            if (itsType == '{')
-                aType = '}';
-
-            if (aType != 0)
-
-                theStr.Print("%c",
-                       aType);
-
-        }
-
-        if (itsNext != NULL)
-        {
-            theStr.Print(",\n");
-            itsNext->Walk(theStr, theLevel);
-        }
-        else
-            theStr.Print("\n");
-
-    }
-
-};
-
-static const char *ParseJSON(const char *theJSON,
-                             JSON_Entry *theEntry = NULL,
-                             int theLevel = 0)
-
-{
-
-CviStr aName;                          // name
-CviStr aValue;                         // value
-
-const char *aRc = NULL;                // not found yet
-
-const char *aInQuote = NULL;           // not processing a quote yet
-const char *aInValue = NULL;           // in value?
-const char *aInArray = NULL;           // in array?
-
-JSON_Entry   *anArray = NULL;          // array elemen
-
-char    aQuotedValue = false;          // was value quoted?
-
-                                       
-if (theEntry == NULL)                  // if top
-
-    theEntry = new JSON_Entry("(top)"); // allocate top
-
-while (aRc == NULL &&                  // while not found and
-       *theJSON != 0)                  // not end of string
-
-{                                      // begin process JSON
-
-    if (aInQuote)                      // if processing in quote
-
-    {                                  // begin process quoted data
-
-        if (*theJSON == '\\' &&        // if escaped
-            *(theJSON+1) == '\"')      // quote
-
-        {                              // begin ignore
-
-            theJSON ++;                // bump
-
-        }                              // end ignore
-
-        else                           // otherwise
-
-        if (*theJSON == '\"')          // if quote
-
-        {                              // begin grab quote value
-
-            if (aInValue == NULL)      // if not in value 
-
-                aName.Print("%*.*s",   // setup name
-                            (int) (theJSON - aInQuote),
-                            (int) (theJSON - aInQuote),
-                            aInQuote);
-
-            else                       // otherwise
-                                       
-            {                          // begin value
-
-                aValue.Print("%*.*s",  // setup name
-                             (int) (theJSON - aInQuote),
-                             (int) (theJSON - aInQuote),
-                             aInQuote);
-
-                aQuotedValue = true;   // value was quoted
-
-                aInValue = NULL;       // no longer inside value
-
-            };                         // end value
-
-            aInQuote = NULL;           // mark in quote
-
-        };                             // end grab quote value
-
-    }                                  // end process quoted data
-
-    else                               // otherwise
-
-    if (*theJSON == '\n')              // ignore newlines
-    {
-
-    }
-    else
-
-    if (aInArray &&
-        (*theJSON == ']' || *theJSON == ','))
-
-    {                                  // begin end of array entry
-
-        if (strlen(aValue) != 0)       // if value is set
-
-            anArray->AddValue          // add value to array
-                (new JSON_Entry(aValue)); 
-
-        aValue.Reset();                // clear value
-
-        aQuotedValue = false;          // reset quoted value
-
-        if (*theJSON == ']')           // if close
-
-           aInArray = NULL;            // close it out
-
-    }                                  // end end of array entry
-
-    else                               // otherwise
-
-    if (*theJSON == '}' ||             // if end brace
-        *theJSON == ',')               // or comma
-
-    {                                  // begin end of name/value pair
-
-        aInValue = NULL;               // end of value
-
-        if (strlen(aName) != 0)        // if name is set
-
-        {                              // begin add name/value pair
-
-            if (!strcmp(aValue, "null") &&
-                !aQuotedValue)
-
-            {                          // begin null
-                
-                JSON_Entry *aNull =    // setup NULL entry
-                    new JSON_Entry(aName, NULL);
-
-                aNull->SetType('N');   // mark as NULL
-
-                theEntry->AddChild(aNull); // add null
-
-            }                          // end null
-                                       
-            else
-
-            if (!strcmp(aValue, "true") &&
-                !aQuotedValue)
-
-            {                          // begin null
-                
-                JSON_Entry *aNull =    // setup NULL entry
-                    new JSON_Entry(aName, NULL);
-
-                aNull->SetType('T');   // mark as NULL
-
-                theEntry->AddChild(aNull); // add null
-
-            }                          // end null
-                                       
-            else
-
-            if (!strcmp(aValue, "false") &&
-                !aQuotedValue)
-
-            {                          // begin null
-                
-                JSON_Entry *aNull =    // setup NULL entry
-                    new JSON_Entry(aName, NULL);
-
-                aNull->SetType('F');   // mark as NULL
-
-                theEntry->AddChild(aNull); // add null
-
-            }                          // end null
-                                       
-            else                       // otherwise
-                                       
-            {                          // begin good value
-
-                theEntry->AddChild         // add name/value pair
-                    (new JSON_Entry(aName,
-                                    aValue)); 
-
-            };                         // end good value
-
-        };                             // end add name/value pair
-
-        aName.Reset();                 // reset name
-
-        aValue.Reset();                // reset value
-
-        aQuotedValue = false;          // reset quoted value
-
-        if (*theJSON == '}')           // brace?
-
-           return theJSON;             // return
-
-    }                                  // end end of name/value pair
-
-    else
-
-    if (*theJSON == ':')               // if value marker
-
-        aInValue = theJSON;            // indicate we are in value area
-
-    else                               // otherwise
-
-    if (*theJSON == '[')               // if array opening
-
-    {                                  // begin start array
-
-        if (strlen(aName) != 0)        // if name is set
-
-        {
-            anArray = theEntry->AddChild
-                 (new JSON_Entry(aName));
-
-            anArray->SetType('[');
-
-            aInArray = theJSON;            // inside array
-        }
-        aValue.Reset();                // no value
-
-        aQuotedValue = false;          // reset quoted value
-
-        aName.Reset();                 // reset name
-
-    }                                  // end start array
-
-    else                               // otherwise
-
-    if (*theJSON == '{')               // if opening brace
-
-    {
-
-       aInValue = NULL;                // not really in a value stage now
-
-       JSON_Entry *aChild = NULL;
-
-       if (aInArray)                   // if in an array
-
-       {
-
-           aChild = new JSON_Entry("");
-
-           theJSON = ParseJSON         // process array
-                        (theJSON+1,
-                         anArray->AddChild(aChild),
-                         theLevel + 1);
-
-
-       }
-
-       else                            // otherwise
-
-       {
-
-           aChild = new JSON_Entry(aName);
-
-           theJSON = ParseJSON         // process list
-                        (theJSON+1,
-                         theEntry->AddChild(aChild),
-                         theLevel + 1);
-
-       }
-
-       aChild->SetType('{');
-
-       aName.Reset();                  // reset name
-                                       
-       aValue.Reset();                 // clear value
-
-       aQuotedValue = false;           // reset quoted value
-
-    }
-
-    else                               // otherwise
-
-    if (*theJSON == '\"')              // if quote
-
-    {                                  // begin start of quoted string
-
-        aInQuote = theJSON + 1;        // mark in quote
-
-        if (aInArray)                  // if inside array
-
-            aInValue = aInQuote;       // are inside value
-
-        if (aInValue)                  // if inside value
-
-            aValue.Reset();            // reset value
-
-        aQuotedValue = false;          // reset quoted value
-
-    }                                  // end of quoted string
-
-    else                               // otherwise
-
-    if (aInValue)                      // if processing value
-
-        aValue += *theJSON;            // add to value
-
-    theJSON ++;                        // next character
-
-};                                     // end process JSON
-
-
-return((const char *) theEntry);       // return result
-
-}
-
-//
 //****************************************************************************
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//****************************************************************************
-// ToBase36
+// ToBase - converts string in base 10 to string in base X 
 //****************************************************************************
 static void ToBase(CviStr &theInOut,int theBase)   // convert a number as a string to base X string
 {
 
 const char *aCvt = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-unsigned long aNum = atoll(theInOut);  // convert to really long integer format
+unsigned long aNum = strtoul(theInOut, NULL, 10);  // convert to really long integer format
 unsigned long aRem = 0;                // holds remainder
 
 char aOutBuf[256];                     // output buffer
@@ -895,6 +132,65 @@ while (aOut > aOutBuf &&
 theInOut.Set(aOut);                    // setup answer
 
 }
+
+//****************************************************************************
+//
+// Function     : ReadFile
+//
+// Description  : Reads content of a file and append to data string
+//                
+//
+//****************************************************************************
+int ReadFile(const char *theName,      // filename
+             CviStr &theData)          // location to store data
+
+{
+
+int aRc = 0;                           // OK so far
+
+FILE *aFp = fopen(theName, "r");       // open command dataset
+
+if (aFp != NULL)                       // if OK
+
+{                                      // begin read lines
+
+    char aBuffer[8192];
+
+    int aRecLen = fread(aBuffer,
+                        1,
+                        sizeof(aBuffer),
+                        aFp);
+
+    while (aRecLen > 0)                // for all data
+
+    {                                  // begin read in data
+                                       
+        theData.Add(aBuffer, aRecLen); // append new data
+
+        aRecLen = fread(aBuffer,
+                        1,
+                        sizeof(aBuffer),
+                        aFp);
+
+    };                                 // end read in data
+
+    fclose(aFp);                       // close it
+
+}                                      // end read lines
+
+else                                   // otherwise
+
+{                                      // begin fail
+
+    aRc = 8;                           // failed
+
+    GetTaskCviPgm()->Error("Failed opening SYSIN DD\n");
+
+};                                     // end fail
+
+return(aRc);                           // return result
+
+}                                      // end ProcessInput
 
 //****************************************************************************
 //
@@ -1191,7 +487,7 @@ public:
 
 };
 
-static MacroCache aMacroCache;
+MacroCache aMacroCache;
 
 //****************************************************************************
 // 
@@ -1407,12 +703,17 @@ private:
 
     char    itsUnitSize;               // unit size for ReqSize
 
+    void   *itsParms[2];               // parameters for thread
+
+    pid_t   itsThread;                 // thread
+
+    int       itsThreadRc;             // thread return code
+
     unsigned long    itsReqSize;       // required size
     unsigned long    itsMemberCnt;     // anticipated # of members
 
-    int     itsEcb;                    // completion ECB
-    void   *itsTCB;                    // TCB
-    void   *itsParms[2];               // parameters
+    FILE  *itsMemCntFP;                // member count file pointer
+
 
 public:                                
 
@@ -1430,8 +731,8 @@ public:
         itsMemberCnt = 128;            // assume 128 by default
         itsUnitSize = 'B';             // assume blocks
         itsAlloc = itsNeeded;          // don't use for allocation yet
-        itsTCB = NULL;                 // TCB
         itsListed = false;             // not yet listed in DSN_LIST
+        itsMemCntFP = NULL;            // no count yet
     }
 
     ~Dataset()                         // destructor
@@ -1448,26 +749,45 @@ public:
 
     }                                  // end destroy
 
-    int StartThread(void *(*theRoutine)(void *, VariableList *), VariableList *theProps)
+    void GetMemberCount(VariableList *theProps)
+
     {
 
-       int aRc = 0;                    // assume OK
+        int aTotMembers = 0;           // total members
 
-       itsEcb = 0;                     // clear ECB
 
-       itsParms[0] = (void *) this;    // pass parms
-       itsParms[1] = (void *) theProps;// pass property list
+        Populate *aPop = GetPopulate(); // get first population entry
 
-       itsTCB = CviAttachJs
-                ((void *) theRoutine,
-                 (void *) &itsParms,
-                 &itsEcb);
+        while (aPop != NULL)           // for all population entries
 
-       if (itsTCB == NULL)             // if failed
+        {                              // begin process population entry
 
-           aRc = 8;                    // mark failure
+            CviStr aSrcDSN(aPop->GetSourceDSN());
 
-       return(aRc);                    // return result
+            if (strlen(aSrcDSN) > 0)   // while good
+
+            {                          // begin process
+
+                MemberList  memberList;        // DSN member list
+
+                TRACE("GETTING MEMBERS FOR %s\n",
+                      (const char *) aSrcDSN);
+
+                memberList.GetMembers(aSrcDSN);
+
+                int aMems = (int) memberList;
+
+                aPop->SetMemberCnt(aMems);     // save for later trace
+
+                aTotMembers += aMems;          // add member count
+                                       
+            };                                 // end process
+
+            aPop = aPop->GetNext();            // next!
+
+        };                                     // end process population entry
+
+        SetMemberCount(aTotMembers);     // set member count
 
     }
 
@@ -1520,28 +840,9 @@ public:
         }
     }
 
-    int HasTcb()
-    {
-        if (itsTCB != NULL)
-            return(1);
-        return(0);
-    }
-
-    void WaitThread()
-    {
-
-        if (itsTCB != NULL)
-
-        {
-            CviWait(&itsEcb, NULL);
-            CviDetach(itsTCB);
-            itsTCB = NULL;
-        }
-    }
-
     int  GetRC()
     {
-        return(itsEcb & 0x00ffffff);
+        return(itsThreadRc);
     }
 
     void AddJCL(const char *theJCL)    // add to JCL
@@ -1849,7 +1150,7 @@ public:
 
 };                                     
 
-static Dataset      *itsDatasets = NULL; // dataset list
+Dataset      *itsDatasets = NULL; // dataset list
 
 //****************************************************************************
 // 
@@ -1932,20 +1233,6 @@ protected:
             *(((const char *) aOrig) + strlen(aOrig) - 1) == '}')
 
         {                              // begin use empty value
-
-            if (itsUsePrompts)         // if "using prompts" (generating script)
-
-            {                          // begin replace with conditional
-
-                itsToken.Replace("${", "$!{"); // use conditional form
-
-                itsUnknownVar = true;  // has unknown variables
-                                       
-                aRc = 4;               // give warning
-
-            }                          // end replace with conditional
-
-            else                       // otherwise
 
                itsToken.Reset();       // use empty value
 
@@ -2795,6 +2082,9 @@ public:
                 if (aAlone && strlen(aReplaceData) == 0)
                     aCallLen ++;
 
+                if (*(aData + aCallLen) == '\n')
+                    aReplaceData += "$!{NL}";
+
                 aIdx = ReplaceContent(theContent,
                                       aData,
                                       aCallLen,
@@ -3084,7 +2374,11 @@ public:
 class GenDD : public WorkflowIntMacro
 {                           
 public:
-    GenDD(const char *theName = "GEN_DD") : WorkflowIntMacro(theName) { itsCache = true; };
+    GenDD(const char *theName = "GEN_DD") : WorkflowIntMacro(theName)
+    { 
+       itsCache = true; 
+       itsEscape=false;
+    };
 
     virtual void AddCacheParms(CviStr &theParms)
     {
@@ -4070,18 +3364,6 @@ public:
                                                (const char *) aFieldVar->Value());
 
                         CviStr anAnswer(aFieldVar->Value());
-
-                        if (itsUsePrompts)
-
-                        {
-
-                            anAnswer.Reset();
-                            anAnswer.Print("#GetDatasetInfo(\"%s\"&#44; \"%s\")",
-                                           (const char *) aLLQVar->Value(),
-                                           (const char *) aField);
-
-
-                        }
 
                         if (itsMulti)  // multiples are OK
 
@@ -6210,66 +5492,12 @@ public:
                                            itsVariables,
                                            aReason,
                                            aVelocity) &&
-                        strlen(aReason) == 0 &&
-                        (!itsUsePrompts || strlen(aVelocity) == 0))
+                        strlen(aReason) == 0)
                     {
 
                         TRACE("Will include %s\n",
                                                (const char *) aIncMem);
 
-                    }
-
-                    else
-
-                    if (itsUsePrompts && strlen(aVelocity) > 0)
-
-                    {
-
-                        WorkflowStep *aInc = itsIncludes;
-
-                        while (aInc != NULL &&     // while no match on include steps
-                               strcmp(aInc->GetName(),
-                                      aIncMem))
-
-                            aInc = aInc->GetNext();
-
-                        if (aInc == NULL)          // if not found
-
-                            GetTaskCviPgm()->Warn("Include member %s was not found! (%p)\n",
-                                                   (const char *) aIncMem,
-                                                   (void *) itsIncludes);
-
-                        else
-
-                        {
-
-                            CviStr aIncVar;
-
-                            aIncVar.Print("Inc%s", (const char *) aIncMem);
-                            aIncVar.Replace("$", "Dlr");
-
-                            itsContent.Print("#if ( \"$!{%s}\" == \"\" ) #set( ${%s} = false )#end \n",
-                                             (const char *) aIncVar,
-                                             (const char *) aIncVar);
-
-                            if (!aIncAgain)         // not including again
-
-                                itsContent.Print("#if ( (!${%s}) && \n( %s )\n)#set ( ${%s} = true )\n%s#end \n",
-                                                 (const char *) aIncVar,
-                                                 (const char *) aVelocity,
-                                                 (const char *) aIncVar,
-                                                 (const char *) aInc->GetContent());
-
-                            else
-
-                                itsContent.Print("#if ( %s \n)#set ( ${%s} = true )\n%s#end \n",
-                                                 (const char *) aVelocity,
-                                                 (const char *) aIncVar,
-                                                 (const char *) aInc->GetContent());
-
-                        }
-
-                        aIncMem.Reset(); // bypass normal route
                     }
 
                     else
@@ -6594,29 +5822,6 @@ public:
 
             else                       // otherwise
 
-            if (itsUsePrompts &&         // if using prompts and
-                strlen(aRewritten) != 0) // unknown variables involved
-
-            {                          // begin handle unknowns
-
-                if (!itsWriteVelocity)
-                {
-                    CviStr aTemp(aIncData);
-
-                    aIncData.Reset();
-                    aIncData.Print("#if ( %s )\n%s\n#end",
-                                   (const char *) aRewritten,
-                                   (const char *) aTemp);
-
-                    itsPrevCond = aRewritten;
-
-                    itsWriteVelocity = true;
-                }
-
-            }                          // end handle unknowns
-
-            else                       // otherwise
-
             {                          // begin don't write
 
                 itsLastMatch = false;  // no last match
@@ -6871,6 +6076,8 @@ itsCombine = 0;                        // combine by default
 itsComboCnt = 0;                       // reset combined step counter
 
 itsTarget = TARGET_CONFIGURATION;      // default target
+
+itsBaseStep = NULL;                    // base step
 
 };                                     // end constructor
 
@@ -7558,6 +6765,7 @@ if (strlen(itsDynamic) == 0)
 
 if (strlen(itsType) == 0              || // no type known
     !strcmp(itsType, "PROMPT")        || // not a prompt
+    !strcmp(itsType, "TRANSLATE")     || // not a translation
     !strcmp(itsType, "DATASET_LIST")  || // not dataset list
     !strcmp(itsType, "DATASET_POPULATE") || // not dataset populate
     !strcmp(itsType, "INCLUDE")       || // not include
@@ -7631,6 +6839,7 @@ if (strcmp(itsType, "JCL")          && // if not JCL and
     strcmp(itsType, "WFMACRO")       && // not workflow macro
     strcmp(itsType, "PROMPT")        && // not a prompt      
     strcmp(itsType, "SAVE")          && // not save
+    strcmp(itsType, "TRANSLATE")     && // not translate
     strcmp(itsType, "INSTRUCTIONS"))    // nor instructions
 
 {                                      // begin invalid type
@@ -7672,6 +6881,130 @@ return(aRc);                           // return result
 void WorkflowStep::MarkTemplate(const char *theMember)
 {
   AddList(itsTemplates, theMember);    // add member to list
+}
+
+//****************************************************************************
+//
+// Method       : WorkflowStep::Translate
+//
+// Description  : Perform translation template work
+//
+//****************************************************************************
+int WorkflowStep::Translate(CviStr &theContent)
+
+{
+
+int aRc = 0;                           // return code is OK
+
+int aInTranslate = 0;                  // not in translate
+
+CviStr aName;                          // name to search
+CviStr aValue;                         // value to replace
+
+CviStr aCommands(itsContent);          // content are the commands
+
+
+const char *aCmdLine = NULL;
+
+while ((aCmdLine = aCommands.Tok("\n")) != NULL)
+
+{
+
+    CviStr aLine(aCmdLine);
+
+
+    while (strlen(aLine) >= 1 &&
+           *((const char *)aLine + strlen(aLine) - 1) == '\\')
+
+    {                                  // begin line continued
+
+          aLine.Replace(strlen(aLine)-1, "\n"); // replace with newline
+
+          aCmdLine = aCommands.Tok("\n");
+
+          if (aCmdLine == NULL)        // no more?
+
+              break;                   // break out
+
+          else                         // otherwise
+
+              aLine += aCmdLine;       // add to existing line
+
+    }                                  // end line continued
+
+    aLine.Replace("&slash;", "/");
+
+    const char *aKey = NULL;
+
+    if (aInTranslate > 0)
+
+        aKey = (const char *) aLine;
+
+    else
+
+        aKey = aLine.Tok(" ");
+
+    if (aKey == NULL)
+        continue;
+
+    if (aInTranslate == 2)
+
+    {
+        aInTranslate --;
+
+        aName.Set(aKey);
+
+    }
+
+    else
+
+    if (aInTranslate == 1)
+
+    {
+
+        aInTranslate --;
+
+        aValue.Set(aKey);
+
+        aName.VelocityEscape();
+
+        TRACE("Translating %s to %s\n",
+              (const char *) aName,
+              (const char *) aValue);
+
+        theContent.Replace(aName,      // perform
+                           aValue);    // translation
+
+        aName.VelocityUnescape();
+
+        TRACE("Translating %s to %s\n",
+              (const char *) aName,
+              (const char *) aValue);
+
+        theContent.Replace(aName,      // perform
+                           aValue);    // translation
+
+    }
+
+    else
+
+    if (!strcmp(aKey, "TRANSLATE"))
+
+    {
+
+        aInTranslate = 2;              // next two lines are translation name/value
+
+    };
+
+};
+
+if (itsNext != NULL)
+
+    itsNext->Translate(theContent);
+
+
+return(aRc);                           // return result
+
 }
 
 //****************************************************************************
@@ -8486,6 +7819,43 @@ while (aData != NULL)                  // for all data
 
 //****************************************************************************
 //
+// Method       : WorkflowStep::FinalizeContent
+//
+// Description  : Prepare content for XML
+//
+// Parameters   : 1) Buffer to prepare
+//
+//****************************************************************************
+void WorkflowStep::FinalizeContent(CviStr &theStr)
+
+{                                      // begin finalize content
+
+theStr.XMLEscape();                    // use escape sequences
+
+if (strstr(theStr, "${NL}") != NULL || // if $NL is being used
+    strstr(theStr, "$NL") != NULL)
+
+{                                      // begin add $NL set
+
+    CviStr aData(theStr);              // new data
+
+    theStr.Reset();                    // clear destination string
+
+    theStr.Print(SET_NL);              // set newline variable
+
+    theStr.Add(aData);                 // add remaining data
+
+};                                     // end add $NL set
+
+if (strlen(theStr) > 0 &&              // if non-empty content
+    *(const char *) theStr == ' ')     // and starts with space
+
+    theStr.Replace(0, "$!{ZBMCSPC} "); // replace with bogus Velocity variable to preserve leading whitespace
+
+};                                     // end write macro
+
+//****************************************************************************
+//
 // Method       : WorkflowStep::PrepareContent
 //
 // Description  : Prepare content for XML
@@ -8520,16 +7890,8 @@ if (thePropVars != NULL)               // if we have property values
 
 {                                      // begin replace with values
 
-    if (itsUsePrompts)                 // if using prompts
-
-        thePropVars->                  // replace with values
-           ReplaceWithValues(theStr,   // but do NOT escape
-                             false);   // as ROWVARs can contain variables...
-
-    else                               // otherwise
-
-        thePropVars->                  // replace with values
-           ReplaceWithValues(theStr);      
+    thePropVars->                      // replace with values
+       ReplaceWithValues(theStr);      
 
     if (theSubJCLVar)                  // if replace JCL variables
     {
@@ -8545,9 +7907,6 @@ if ( theWfVars != NULL)                // if we have workflow variables
     theWfVars->                        // replace with Velocity names
       ReplaceWithVelocityNames(theStr);
 
-
-//  ReplaceConditionalVars(theStr);      // replace any conditionals remaining with empty strings
-
 ProcessTab(theStr);                    // process #TAB. Should probably be
                                        // the last thing to process before escaping
                                        // characters as other substitutions taking place
@@ -8556,59 +7915,13 @@ ProcessTab(theStr);                    // process #TAB. Should probably be
 ProcessSplits(theStr);                 // process splits
                                  
 if (strstr(theStr, "<pre>") == NULL && // if not preformatted text
-    theWfVars != NULL)                 // and not instructions/content (but always if UsePrompts enabled)
+    theWfVars != NULL)                 // and not instructions/content
 {
-//    while (strstr(theStr, "#end\n") != NULL)
-//       theStr.Replace("#end\n", "#end${NL}\n");// escape blank lines
 
     while (strstr(theStr, "\n\n") != NULL)
        theStr.Replace("\n\n", "\n$NL\n");// escape blank lines
+
 }
-
-
-theStr.Replace("&#44;", ",");          // reverse to prevent replace errors below
-theStr.Replace("&amp;", "&");          // reverse to prevent replace errors below
-theStr.Replace("&gt;", ">");           // reverse to prevent replace errors below
-theStr.Replace("&lt;", "<");           // reverse to prevent replace errors below
-theStr.Replace("&quot;", "\"");        // reverse to prevent replace errors below
-theStr.Replace("&apos;", "'");         // reverse to prevent replace errors below
-
-theStr.Replace("&", "&amp;");          // escape &
-theStr.Replace("<", "&lt;");           // escape <   
-theStr.Replace(">", "&gt;");           // escape >
-theStr.Replace("\"", "&quot;");        // escape "
-theStr.Replace("'", "&apos;");         // escape '
-
-
-//TRACE("WFVars: %p\n",
-//                       theWfVars);
-//
-//TRACE("Checking set for: %s\n",
-//                       (const char *)  theStr);
-
-
-//if (theWfVars != NULL               || // if any variables
-//    thePropVars != NULL)               // are present
-
-if (strstr(theStr, "${NL}") != NULL || // if $NL is being used
-    strstr(theStr, "$NL") != NULL)
-
-{                                      // begin add $NL set
-
-    CviStr aData(theStr);              // new data
-
-    theStr.Reset();                    // clear destination string
-
-    theStr.Print(SET_NL);              // set newline variable
-
-    theStr.Add(aData);                 // add remaining data
-
-};                                     // end add $NL set
-
-if (strlen(theStr) > 0 &&              // if non-empty content
-    *(const char *) theStr == ' ')     // and starts with space
-
-    theStr.Replace(0, "$!{ZBMCSPC} "); // replace with bogus Velocity variable to preserve leading whitespace
 
 };                                     // end write macro
 
@@ -8755,30 +8068,21 @@ if (strcmp(itsType, "GROUP"))          // if not a group step
 
         {                              // begin check
 
+            MemberList aMemList;
+
             TRACE("Checking %s %s\n", aDSN, aMem);
 
-            MemberList memberList;     // DSN member list
+            Member *aMember = aMemList.GetMembers(aDSN);
 
-            memberList.setFile(aDSN);  // set DSN
-
-            if (memberList.List())     // if list is good
+            if (aMember != NULL)      // if OK
 
             {                          // begin process list
 
-                const CCollVectorExt<BmcString> & members = 
-                   memberList.getMemberSet();      
+                while (aMember != NULL)
 
-                const BmcString* pMem;             // member name
+                {
 
-                CConstCollVectorExtIter<BmcString> iter( members );
-
-                for ( pMem = iter.First();         // iterate through
-                      pMem;                        // all of the
-                      pMem = ++iter )              // members
-
-                {                                  // begin process member
-
-                    CviStr aStr = pMem->Cptr();    // get into our string format
+                    const char *aStr = (const char *) *aMember;
 
                     if (!strcmp(aStr, aMem))       // if found
 
@@ -8797,6 +8101,8 @@ if (strcmp(itsType, "GROUP"))          // if not a group step
                         break;                     // exit loop
 
                     };                             // and add conditions
+
+                    aMember = aMember->GetNext();  // get next member
 
                 };                                 // end process member
 
@@ -9077,7 +8383,6 @@ itsProcType = 0;                       // not processing now
 
 ResetReferences(theWfMacros,           // reset reference counters
                 theVars);              // and reference variables
-
 
 if (aOrigContentLen > 0 &&             // if we had content
     strlen(itsContent) == 0)           // but now we do not
@@ -10467,8 +9772,12 @@ while (aMacro != NULL)                 // for all macros
         TRACE("Adding content for %s: %s...\n",
                (const char *) aMacName,
                (const char *) aMacro->GetContent());
-        itsContent.Add(aMacro->GetContent());
                                        
+        CviStr aMacContent(aMacro->GetContent()); // grab macro content
+                                       
+        aMacContent.XMLEscape();       // escape special characters
+
+        itsContent.Add(aMacContent);   // add content
                                        
     };                                 // end add macro
 
@@ -10483,7 +9792,11 @@ while (aMacro != NULL)                 // for all macros
 
         aAdded = 1;                    // added
 
-        itsInstructions.Add(aMacro->GetContent());
+        CviStr aMacContent(aMacro->GetContent()); // grab macro content
+
+        aMacContent.XMLEscape();       // escape special characters
+
+        itsInstructions.Add(aMacContent); // add content
 
     };                                 // end add macro
 
@@ -10498,7 +9811,11 @@ while (aMacro != NULL)                 // for all macros
 
         aAdded = 1;                    // added
 
-        itsSaveAs.Add(aMacro->GetContent());
+        CviStr aMacContent(aMacro->GetContent()); // grab macro content
+
+        aMacContent.XMLEscape();       // escape special characters
+
+        itsSaveAs.Add(aMacContent);    // add content
 
     };                                 // end add macro
 
@@ -10966,6 +10283,7 @@ return(aRc);                           // return result
 //                2) Workflow variables
 //                3) Property variables
 //                4) Velocity macros
+//                5) Translation templates
 //
 // Returns      : Count of items processed
 //
@@ -10973,7 +10291,8 @@ return(aRc);                           // return result
 int  WorkflowStep::GenGroup(CviStr &theXml,
                             VariableList *theWfVars,
                             VariableList *thePropVars,
-                            WorkflowStep *theMacros)
+                            WorkflowStep *theMacros,
+                            WorkflowStep *theTranslates)
 
 {                                      // begin GenGroup
 
@@ -11027,7 +10346,8 @@ while (aStep != NULL)                  // for all steps
         aStepCnt += aStep->GenXML(theXml, // generate XML for it
                                   theWfVars,
                                   thePropVars,
-                                  theMacros);
+                                  theMacros,
+                                  theTranslates);
 
     else                               // otherwise 
 
@@ -11108,6 +10428,7 @@ return(NULL);                          // not found
 //                2) Workflow variables
 //                3) Property variables
 //                4) Velocity macros
+//                5) Translate templates
 //
 // Returns      : Count of items processed
 //
@@ -11115,9 +10436,15 @@ return(NULL);                          // not found
 int WorkflowStep::GenXML(CviStr &theXml,
                          VariableList *theWfVars,
                          VariableList *thePropVars,
-                         WorkflowStep *theMacros)
+                         WorkflowStep *theMacros,
+                         WorkflowStep *theTranslates)
 
 {                                      // begin Generate
+
+if (!itsRealStep)                      // if not a real step
+
+    return 0;                          // do nothing
+
 
 int     aStepCnt = 0;                  // count of child steps
 
@@ -11146,7 +10473,8 @@ if (!strcmp(itsType, "GROUP"))         // if GROUP
         GenGroup(aChildXml,            // generate
                  theWfVars,            // XML for group
                  thePropVars,
-                 theMacros);
+                 theMacros,
+                 theTranslates);
 
     aStepCnt += aChildCnt;             // bump step counter
 
@@ -11172,11 +10500,15 @@ if (!strcmp(itsType, "GROUP"))         // if GROUP
                        NULL,
                        thePropVars);
 
+        FinalizeContent(itsTitle);
+
         itsTitle.VelocityUnescape();   // remove escape sequences
 
         PrepareContent(itsDescription, // prepare description for XML
                        NULL,
                        thePropVars);
+        
+        FinalizeContent(itsDescription);
         
         itsDescription.VelocityUnescape(); // remove escape sequences
 
@@ -11511,17 +10843,21 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
                    NULL,
                    thePropVars);
 
+    FinalizeContent(itsTitle);
+    
     itsTitle.VelocityUnescape();   // remove escape sequences
 
     PrepareContent(itsDescription, // prepare description for XML
                    NULL,
                    thePropVars);
 
+    FinalizeContent(itsDescription);
+    
     itsDescription.VelocityUnescape();   // remove escape sequences
-
+    
     PrepareContent(itsSkills);         // prepare skills for XML
 
-    itsSkills.VelocityUnescape();   // remove escape sequences
+    FinalizeContent(itsSkills);
 
     theXml.Print                       // <step> tag
            ("  <title>%.100s</title>\n  <description>%s</description>\n",
@@ -11579,7 +10915,13 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
 
         TRACE("GENXML preparing additional content for %s\n", (const char *) itsName);
 
-        AddMacros(theMacros);
+        if (theTranslates != NULL)     // if translation is wanted
+
+        {
+            theTranslates->Translate(itsContent);
+            theTranslates->Translate(itsInstructions);
+            theTranslates->Translate(itsSaveAs);
+        }
 
         PrepareContent(itsInstructions,// prepare instructions for XML
                        theWfVars,
@@ -11591,6 +10933,28 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
                            theWfVars,
                            thePropVars,
                            1);
+
+        if (strlen(itsSaveAs) > 0)     // if have save-as
+
+            PrepareContent(itsSaveAs,
+                           theWfVars,
+                           thePropVars,
+                           false,
+                           true);
+
+        if (theTranslates != NULL)     // if we have translations
+
+        {
+            theTranslates->Translate(itsContent);
+            theTranslates->Translate(itsInstructions);
+            theTranslates->Translate(itsSaveAs);
+        }
+
+        AddMacros(theMacros);
+
+        FinalizeContent(itsInstructions);
+        FinalizeContent(itsContent);
+        FinalizeContent(itsSaveAs);
 
         CviStr aWfVars;                // workflow variables used
 
@@ -11610,10 +10974,6 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
 
                 TRACE("Adding variable %s\n", 
                       aVar->GetName());
-
-                CviStr aOld(aWfVars);
-
-                aWfVars.Reset();       // add in reverse order to match order in PROMPT templates
 
                 Variable *aReq = aVar->FindSubVar("REQUIRED");
 
@@ -11649,8 +11009,6 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
                     aWfVars.Print("  <variableValue name=\"%s\" scope=\"%s\" noPromptIfSet=\"false\" required=\"false\"/>\n",
                                   aNameVal,
                                   aScopeVal);
-
-                aWfVars.Add(aOld);
 
             }                          // end prompt/show variable
 
@@ -11773,7 +11131,9 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
                     aJob.Print("//%s JOB\n",
                                (const char *) itsJobName);
 
-                    PrepareContent(aJob, theWfVars, thePropVars);
+                    PrepareContent(aJob,
+                                   theWfVars,
+                                   thePropVars);
 
                     theXml += aJob;    // add to XML
 
@@ -11803,6 +11163,8 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
                                        theWfVars,
                                        thePropVars);
 
+                        FinalizeContent(itsSuccess);
+                        
                         itsSuccess.VelocityUnescape();
 
                         theXml.Print("    <submitAs maxRc=\"%d\">%s</submitAs>\n"
@@ -11832,11 +11194,11 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
                     //itsSaveAs.ReplaceSymbol("SYSNAME",
                     //                        "${_workflow-systemName}");
 
-                    PrepareContent(itsSaveAs,  // prepare for XML
-                                   theWfVars,
-                                   thePropVars,
-                                   false,
-                                   true);
+                    //PrepareContent(itsSaveAs,  // prepare for XML
+                    //               theWfVars,
+                    //               thePropVars,
+                    //               false,
+                    //               true);
                     
                     // Don't unescape - let it always do substitution
                     //if (strstr(itsSaveAs, "${") == NULL)
@@ -11857,149 +11219,6 @@ if (!strcmp(itsType, "SAVE")        && // if SAVE type
             };                         // end add JCL
 
         };                             // end has content
-
-        if (itsGenMembers)             // if creating members right now
-
-        {                              // begin create member now
-
-            CviStr aSaveAs(itsSaveAs);
-
-            aSaveAs.VelocityUnescape();// remove escape sequences
-            itsContent.VelocityUnescape(); // remove escape sequences
-
-            CviStr aDD(itsJclOut);     // open JCLOUT
-
-            const char *aMem = strstr(aSaveAs, "(");
-
-            if (aMem != NULL)
-
-                aDD += aMem;
-            
-            else
-
-                if (strlen(itsJobName) != 0)
-                    aDD.Print("(%s)", (const char *) itsJobName);
-
-            else
-
-                aDD.Print("(%s)", (const char *) itsMember);  
-
-            PrepareContent(aDD,            // prepare title for XML
-                           NULL,
-                           thePropVars);
-
-            //aDD.Replace("${_workflow-workflowOwnerUpper}", GetTaskCviPgm()->GetUser());
-            //aDD.Replace("${_WORKFLOW-WORKFLOWOWNERUPPER}", GetTaskCviPgm()->GetUser());
-
-            GetTaskCviPgm()->Print("Attempting to create %s\n",
-                                   (const char *) aDD);
-
-            FILE *aFp = fopen(aDD, "w,lrecl=80,blksize=3120,recfm=FB,primary=4000,secondary=4000,directory=200");
-
-            if (aFp != NULL)
-
-            {
-
-                GetTaskCviPgm()->Print("Creating %s\n", (const char *) aDD);
-
-                if (strstr(itsType,
-                           "SAVE") == NULL &&
-                    strstr(itsType,
-                           "INSTRUCTIONS") == NULL)
-
-                {
-
-                    CviStr aJobCard;
-
-                    if (thePropVars != NULL)
-
-                       thePropVars->ValueByName
-                          ("CVIBLDWF_JOBCARD", aJobCard);
-
-                    aJobCard.Replace("JOBNAME", (const char *) itsJobName);
-
-                    fprintf(aFp, "%s\n", (const char *) aJobCard);
-
-                }
-
-                CviStr aContent(itsContent);
-
-                if (strlen(aContent) == 0)
-
-                    aContent.Set(itsInstructions);
-
-                aContent.Replace("&amp;", "&");          // reverse
-                aContent.Replace("&gt;", ">");           // reverse
-                aContent.Replace("&lt;", "<");           // reverse
-                aContent.Replace("&quot;", "\"");        // reverse
-                aContent.Replace("&apos;", "'");         // reverse
-                aContent.Replace("${NL}\n", "\n");       // reverse
-                aContent.Replace("$NL\n", "\n");         // reverse
-                aContent.Replace(SET_NL, "");            // reverse
-
-                if (strstr(itsType, "REXX") != NULL)
-
-                {
-
-                    fprintf(aFp, "//*********************************************************************\n");
-                    fprintf(aFp, "//*         COPY STEP - IEBGENER -                                    *\n");
-                    fprintf(aFp, "//*********************************************************************\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//GENER    EXEC PGM=IEBGENER\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//SYSPRINT DD SYSOUT=*\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//SYSIN    DD DUMMY\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//SYSUT1   DD DDNAME=TSOREXX\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//SYSUT2   DD DISP=(NEW,PASS),DSN=&&TMP(TSOREXX),\n");
-                    fprintf(aFp, "//             UNIT=SYSALLDA,SPACE=(1024,(1000,500,1)),\n");
-                    fprintf(aFp, "//             DCB=(RECFM=FB,LRECL=80,BLKSIZE=0)\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//TSOREXX  DD *,DLM=$$\n");
-
-                };
-
-                fprintf(aFp, "%s", (const char *) aContent);
-
-                if (strstr(itsType, "REXX") != NULL)
-
-                {
-                    fprintf(aFp, "$$\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//*********************************************************************\n");
-                    fprintf(aFp, "//*         RUN  STEP - IKJEFT01 -                                    *\n");
-                    fprintf(aFp, "//*********************************************************************\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//RUNIT    EXEC PGM=IKJEFT01\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//SYSEXEC  DD DISP=(OLD,DELETE),DSN=&&TMP\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//SYSTSPRT DD SYSOUT=*\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//SYSTSIN  DD *\n");
-                    fprintf(aFp, "  %TSOREXX\n");
-                    fprintf(aFp, "/*\n");
-                    fprintf(aFp, "//*\n");
-                    fprintf(aFp, "//*********************************************************************\n");
-
-                }
-
-                fclose(aFp);
-
-            }
-
-            else                       // otherwise
-
-            {                          // begin display error
-
-                GetTaskCviPgm()->Print("Unable to create %s\n",
-                                       (const char *) aDD);
-
-            };                         // end display error
-
-        };                             // end create member now
 
     };                                 // end assum leaf step
 
@@ -12092,8 +11311,7 @@ theJCL.Add("//*\n");                   // add blank line
 //
 //****************************************************************************
 BuildWorkflow::BuildWorkflow(int theArgc,
-                             const char **theArgv,
-                             bool theReRun) :
+                             const char **theArgv) :
     CviPgm("CVIWFBLD", theArgc, theArgv)
 
 {                                      // begin constructor
@@ -12114,17 +11332,15 @@ itsPopSteps = NULL;                    // no population steps yet
 
 itsDatasets = NULL;                    // no dataset steps yet
 
-itsTempDSN = NULL;                     // no DSN
-
-itsTempStream = NULL;                  // no stream yet
-
 itsTempCount = 0;                      // no templates found yet
 
 itsRealCount = 0;                      // no real templates yet
 
 itsPropVars = &itsProdVars;            // use product variables
 
-itsReRun = theReRun;                   // re-run flag
+itsPrompts = NULL;                     // no prompt templates
+
+itsTranslates = NULL;                  // no translate templates
 
 itsAddTargets =                        // create target
    new Variable("TARGET","");          // merge variable
@@ -12144,7 +11360,7 @@ int BuildWorkflow::Init(void)          // initialize
 
 int aRc = 0;                           // return code
 
-Print("BMC Software, Inc. Workflow Builder %s Initializing\n",
+Print("Workflow wiZard %s Initializing\n",
       CVI_VERSTRING);
 Print("Built %s %s\n", __DATE__, __TIME__);
 
@@ -12174,53 +11390,173 @@ void BuildWorkflow::Reset(void)        // reset
 
 {                                      // begin Reset
 
-#ifdef _SRC_
-
-if (itsSteps != NULL)                  // if steps OK
-                                       
-    delete itsSteps;                   // delete
-                                       
-if (itsGroups != NULL)                 // if groups OK
-                                       
-    delete itsGroups;                  // delete groups
-                                       
-if (itsIncludes != NULL)               // if includes OK
-                                       
-    delete itsIncludes;                // delete
-                                       
-if (itsMacros != NULL)                 // if macros OK
-                                       
-    delete itsMacros;                  // remove macros
-                                       
-if (itsWfMacros != NULL)               // if wf macros OK
-                                       
-    delete itsWfMacros;                // remove wf macros
-                                       
-if (itsPopSteps != NULL)               // if population steps
-                                       
-    delete itsPopSteps;                // delete population steps
-                                       
-itsSteps = NULL;                       // clear
-
-itsGroups = NULL;                      // clear
-
-itsIncludes = NULL;                    // clear
-
-itsMacros = NULL;                      // clear
-
-itsWfMacros = NULL;                    // clear
-
-itsPopSteps = NULL;                    // clear
-
-itsMasterXML.Reset();                  // reset
-
-#endif
-
 itsTempCount = 0;                      // reset
 
 itsRealCount = 0;                      // reset
 
 };                                     // end reset
+
+//****************************************************************************
+//
+// Method       : BuildWorkflow::ProcessInput
+//
+// Description  : Process input commands
+//
+//****************************************************************************
+int BuildWorkflow::ProcessInput()      // process input
+
+{
+
+int aRc = 0;                           // OK so far
+
+CviStr aData;                          // input data
+
+
+aRc = ReadFile("DD:SYSIN", aData);     // read input data
+
+if (aRc == 0)                          // if read was good
+
+{                                      // begin process data
+
+    const char *aLine =                // get first
+        aData.Tok("\n");               // line
+
+    while (aLine != NULL)              // for all lines
+
+    {                                  // begin process line
+
+        CviStr aStmt(aLine);           // statement
+
+        aStmt.Trim(' ');               // trim trailing spaces
+
+        const char *aCmd =             // get 
+            aStmt.Tok("=");            // command
+
+        if (aCmd != NULL)              // valid?
+
+        {                              // begin process command
+
+            const char *aVal =         // get value
+                aStmt.Tok("");         // get remaining line
+
+           if (!strcmp(aCmd,           // template DD?
+                       "TEMPLATE"))
+
+           {                           // begin TEMPLATE
+
+               if (aVal != NULL)       // if valid
+
+                   AddList(itsTemplateDSNList,
+                           aVal);
+
+           }                           // end TEMPLATE
+
+           else                        // otherwise
+
+           if (strstr(aCmd,
+                      "PROP") == aCmd) // if property
+
+           {                           // begin PROP*
+
+               if (aVal != NULL &&     // if valid
+                   strcmp(aCmd, "PROPERTY")) // and not PROPERTY
+
+
+               {                       // begin store pair
+
+                   CviStr aPair;
+
+                   aPair.Print("%s=%s",
+                               (const char *) aCmd,
+                               (const char *) aVal);
+
+                   AddList(itsPropertiesDSNList,
+                           aPair);
+
+               }                       // end store pair
+
+               else                    // otherwise
+
+               if (aVal != NULL)       // if valid
+
+               {
+                   itsPropertiesMem.Reset();
+
+                   itsPropertiesMem.Print("//'%s'",
+                                          aVal);
+
+               }
+
+
+           }                           // end PROP*
+
+           else                        // otherwise
+
+           if (!strcmp(aCmd,
+                       "WORKFLOW"))    // if workflow member
+
+           {                           // begin WORKFLOW_MEMBER
+
+               itsWorkflowMem.Reset();  // reset
+
+               if (aVal != NULL)       // if valid
+
+                   itsWorkflowMem.Print("//'%s'",
+                                       (const char *) aVal);
+
+
+           }                           // end WORKFLOW_MEMBER
+
+           else                        // otherwise
+
+           if (!strcmp(aCmd,
+                       "WORKFLOW_DSN")) // if workflow DSN
+
+           {                           // begin WORKFLOW_DSN
+
+               if (aVal != NULL)       // if valid
+
+                   itsWorkflowDSN.Set(aVal);
+
+
+           }                           // end WORKFLOW_DSN
+
+           else                        // otherwise
+
+           {                           // begin failure
+
+               Error("%s is not a valid command.\n",
+                     aCmd);
+
+               aRc = 8;                // fail
+
+           }                           // end failure
+
+        };                             // end process command
+
+        aLine = aData.Tok("\n");       // next line
+
+    };                                 // end process line
+
+}                                      // end process data
+
+else                                   // otherwise
+
+{                                      // begin fail
+
+    aRc = 8;                           // failed
+
+    Error("Failed opening SYSIN DD\n");
+
+};                                     // end fail
+
+Trace("Processed input: %d\n",
+      aRc);
+
+
+return(aRc);                           // return result
+
+}                                      // end ProcessInput
 
 
 //****************************************************************************
@@ -12228,10 +11564,6 @@ itsRealCount = 0;                      // reset
 // Method       : BuildWorkflow::Work
 //
 // Description  : Does actual work
-//
-// The followoing DDs should be defined
-//  1. TEMPLATE - Library of templates to read.
-//  2. WORKFLOW - Output DD
 //
 //****************************************************************************
 int BuildWorkflow::Work()              // build workflow
@@ -12243,19 +11575,16 @@ int aRc = 0;                           // OK so far
 
 if (aRc == 0)                          // if OK
 
+    aRc = ProcessInput();              // process input commands
+
+if (aRc == 0)                          // if OK
+
     aRc = GenStdProperties();          // generate standard properties
 
 if (aRc == 0)                          // if OK
 
     aRc = ReadProperties               // read in regular
-            ("//DDN:PROPERTY",         // properties file
-             true);                    // replace pre-existing entries
-
-if (aRc == 0 &&                        // if OK and
-    itsReRun)                          // in re-run mode
-
-    aRc = ReadProperties               // read in regular
-            ("//DDN:USERPROP",         // properties file
+            (itsPropertiesMem,         // properties file
              true);                    // replace pre-existing entries
 
 if (aRc == 0)                          // if OK
@@ -12271,11 +11600,6 @@ aMacroCache.Clear();                   // clear workflow macro cache from shared
 if (aRc == 0)                          // if OK
 
     aRc = ResolveUnixDSNs();           // try to resolve unknown UNIX DSNs
-
-if (aRc == 0                        && // if OK and
-    strstr(itsJclOut, "//DSN") == (const char *) itsJclOut)
-
-    aRc = CleanupJCLOUT();             // cleanup JCL out
 
 if (aRc == 0)                          // if OK
 
@@ -12309,14 +11633,17 @@ if (aRc == 0)                          // if OK
                                        
     aRc = CreatePopArray();            // create population array for DSNs
 
-if (aRc == 0 &&                        // if OK
-    !itsReRun)                         // and not a re-run
+if (aRc == 0)                          // if OK
 
     aRc = SizePopulate();              // size population templates Accumulated 1.25
 
 if (aRc == 0)                          // if OK
 
     aRc = MergeSetVariables();         // merge set variables
+
+if (aRc == 0)                          // if OK
+
+    aRc = ProcessTranslates();         // process translation templates
 
 if (aRc == 0)                          // if OK
 
@@ -12338,29 +11665,19 @@ if (aRc == 0)                          // if all is well
 
 {                                      // begin generate or re-run
 
-    if (itsReRun)                      // if re-run
+    if (strlen(itsWorkflowMem) > 0)    // if workflow DD is specified
 
-        aRc = GenerateReRun();         // generate re-run
+        aRc = GenerateWF
+                (itsWorkflowMem);      // generate workflow
 
-    else                               // otherwise
+    if (aRc == 0 &&                    // if OK and
+        strlen(itsWorkflowDSN) > 0)    // is WFOUT defined?
 
-    {                                  // begin generate steps
-
-        if (CviOsIsDefined("WORKFLOW"))
-
-            aRc = GenerateWF
-                    ("//DDN:WORKFLOW"); // generate workflow
-
-        if (CviOsIsDefined("WFOUT   ")) // is WFOUT defined?
-
-             aRc = GenerateDepWFs();   // generate workflows
-
-    };                                 // end generate steps
+         aRc = GenerateDepWFs();       // generate workflows
 
 }                                      // end generate or re-run
                                        
-if (aRc == 0                        && // if OK
-    !itsReRun)                         // and not a rerun
+if (aRc == 0)                          // if OK
 
     aRc = DisplaySteps();              // display steps
 
@@ -12492,57 +11809,6 @@ while (aVar != NULL)                   // for all targets
               (const char *) aMount->Value(),
               (const char *) aVar->FindSubVar("MOUNT_STATUS")->Value());
 
-        if (!aMountOK ||                // if mount point is empty
-            (aDSN != NULL &&            // if UNIX DSN and
-             aLLQ != NULL &&            // we know about an LLQ
-             strstr(aDSN->Value(), " ") != NULL)) // it has spaces (such as "No Data Set Found")
-
-        {                              // begin try to guess name
-
-            CviStr aList(aHLQs);       // grab list
-
-            const char *aHLQ = aList.Tok(",");
-
-            while (aHLQ != NULL)       // for all HLQs
-
-            {                          // begin try HLQ
-
-                CviStr aDSNName;       // DSN
-
-                aDSNName.Print("%s.%s",// setup
-                               (const char *) aHLQ,
-                               (const char *) aLLQ->Value());
-
-                TRACE("Checking for %s\n", (const char *) aDSNName);
-
-                osLocate aLocate;      // DSN locator
-
-                aLocate.dsname(aDSNName);  // set DSN
-
-                int aFc = aLocate.locate();
-
-                TRACE("Result: %d\n", aFc);
-
-                if (aFc == 0)          // if OK
-                                       
-                {                      // begin indicate what we found
-
-                    Print("Will use %s for mount point %s\n",
-                          (const char *) aDSNName,
-                          (const char *) aVar->FindSubVar("MOUNT")->Value());
-
-                    aDSN->SetValue(aDSNName);
-
-                    break;             // break out of HLQ iteration
-
-                }                      // end indicate what we found
-
-                aHLQ = aList.Tok(","); // next!
-
-            }                          // end try HLQ
-
-        }                              // end try to guess name
-
     }                                  // end UNIX taregt
 
     aVar = aVar->GetNext();            // next!                       
@@ -12571,22 +11837,24 @@ VariableList *aSaveList = itsPropVars; // save list
 
 int aRc = 0;                           // assume the best
 
-CviStr aDDs;                           // list of DDs
+CviStr aDSNs(itsPropertiesDSNList);    // get p
 
-CviOsGetDDs(aDDs);                     // get list of DDs
+const char *aDSN = aDSNs.Tok(",");     // get first DD
 
-TRACE("Retrieved DDs: %s\n", (const char *) aDDs);
-
-const char *aDD = aDDs.Tok(",");       // get first DD
-
-while (aDD != NULL)                    // for all DDs
+while (aDSN != NULL)                   // for all DDs
 
 {                                      // begin iterate DDs
 
-    if (strstr(aDD, "PROP") == aDD &&  // if starts with PROP and
-        strcmp(aDD, "PROPERTY") != 0)  // not PROPERTY
+    CviStr aDSNStr(aDSN);              // get DSN into string
 
-    {                                  // begin process shared property DD
+
+    const char *aDD = aDSNStr.Tok("=");// get DD portion
+
+    if (aDD != NULL)                   // if DD is OK
+
+    {                                  // begin process 
+
+        const char *aDSN = aDSNStr.Tok(""); // get DSN
 
         VariableList aShrList;         // shared property list
 
@@ -12602,12 +11870,13 @@ while (aDD != NULL)                    // for all DDs
         aPrefix.Print("%s-",           // prefix - trailing portion of name
                       aDD + strlen("PROP"));
 
-        aDDName.Print("//DDN:%s", aDD);// setup name
+        aDDName.Print("//'%s", aDSN);  // setup name
 
         aDDName.Trim(' ');             // remove trailing spaces
 
-        Print("\nPROCESSING SHARED PROPERTIES FOR %s\n",
-              aDD);
+        Print("\nPROCESSING SHARED PROPERTIES FOR %s %s\n",
+              aDD,
+              aDSN);
 
         aRc = ReadProperties(aDDName); // read in 
         
@@ -12755,11 +12024,11 @@ while (aDD != NULL)                    // for all DDs
         Reset();                       // reset
 
         Print("FINISHED PROCESSING SHARED PROPERTIES FOR %s ---\n",
-              aDD);
+              aDSN);
 
     };                                 // end process shared property DD
 
-    aDD = aDDs.Tok(",");               // next!
+    aDSN = aDSNs.Tok(",");             // next!
 
 };                                     // end iterate DDs
 
@@ -12827,7 +12096,7 @@ if (!theReRead)                        // if not a re-read
                                        
         itsCombineSteps = false;       // turn off step combining
                                        
-        Print("Combing of steps has been disabled.\n");
+        Print("Combining of steps has been disabled.\n");
                                        
     };                                 // end disable combining steps
 
@@ -12876,24 +12145,6 @@ if (!theReRead)                        // if not a re-read
     if (aVar != NULL)                  // if found
 
         aJCLOut.Set(aVar->Value());    // grab value
-
-    if (!itsReRun &&                   // don't allow this for rerun mode...
-        (CviOsIsDefined("JCLOUT  ")  || // if preparing JCL only
-         strlen(aJCLOut) > 0))          // or property JCLOUT value is set
-
-    {                                  // begin create JCL
-                                       
-        itsGenMembers = true;          // generate members to bypass workflow
-                                       
-        Print("JCL will be written in addition to the workflow.\n");
-
-        if (strlen(aJCLOut) > 0)       // if set
-        {                              // set output DSN
-            itsJclOut.Reset();         // reset
-            itsJclOut.Print("//DSN:%s", (const char *) aJCLOut);
-        };                             // end set output DSN
-
-    };                                 // end create JCL
 
     if (itsPropVars->ValueByName       // get variable value
                    ("CVIBLDWF_TRACE",  // to check if trace
@@ -13163,7 +12414,7 @@ int aCount = 0;                        // property count
 int aDisplay = 0;                      // assume we shouldn't display
 
 FILE *aInFp = fopen(theFilename,       // open
-                    "rt");             // properties
+                    "r");              // properties
 
 CviStr  aContent;                      // content of file
 
@@ -13172,18 +12423,18 @@ if (aInFp != NULL)                     // if OK
 {                                      // begin read file
 
     if (!theSilent &&                  // if we shouldn't be silent
-        strstr(theFilename,            // if DDN
-               "DDN:") != NULL)        // passed
+        strstr(theFilename,            // if DSN
+               "//'") != NULL)         // passed
 
     {                                  // begin write message
 
         const char *aDDName =          // grab ddname
-            strstr(theFilename, ":");
+            strstr(theFilename, "//'");
 
         if (aDDName != NULL)           // if found
 
-            Print("Reading properties from DD %s.\n",
-                  aDDName+1);          
+            Print("Reading properties from %s.\n",
+                  aDDName+2);          
 
         else
 
@@ -13221,9 +12472,9 @@ else                                   // otherwise
 
 {                                      // begin fail
 
-    if (strstr(theFilename, ":PROP") != NULL)
+    if (strstr(theFilename, "//'") == theFilename)
 
-        Print("Failed to open %s DD\n", // complain
+        Print("Failed to open %s\n"  , // complain
               theFilename);
 
     r_c = 8;                           // failed
@@ -13391,16 +12642,16 @@ int BuildWorkflow::ReadTemplates(void)
 {                                      // begin ReadTemplates
 
 int aRc = 0;                           // all OK for now
+int aDDCnt = 0;                        // DD counter
 
 CviStr aTempList;                      // templates process
 
 
 Print("Processing workflow templates.\n");
 
-itsTempDSN = NULL;                     // not open
 
-itsTempStream = NULL;                  // not open
-                                       
+CviStr aTempDSNList;                   // temmplate DSN list
+
 Variable *aLocalTemps =                // get local
    itsPropVars->GetVariable("CVIBLDWF_LOCAL_TEMPLATES");
 
@@ -13408,227 +12659,85 @@ if (aLocalTemps == NULL)               // if not set
     aLocalTemps =                      // try old style
        itsPropVars->GetVariable("LOCAL_TEMPLATES");
 
+if (aLocalTemps != NULL)               // if valid
 
-CviStr aLocalDsn;                      // local DSN
+    AddList(aTempDSNList,              // add local override
+            aLocalTemps->Value());     // from properties
 
-if (aLocalTemps != NULL)               // if OK
+AddList(aTempDSNList, itsTemplateDSNList);// add all other template DSNs
 
-    aLocalDsn.Set(aLocalTemps->Value()); // get value
 
-MemberList memberList;                 // DSN member list
+const char *aTempDSN =                 // parse
+     aTempDSNList.Tok(",");            // template list
+
+while (aRc == 0 && aTempDSN != NULL)   // for all template DSNs
+
+{                                      // begin process DSN
+
+    CviStr TempDD;
+    aDDCnt ++;
+
+    TempDD.Print("TEMP%04.4d",
+                 aDDCnt);
+
+    CviStr  TempDSN(aTempDSN);         // get in a form where we can use char *
+
+    __dyn_t aDyn;                      // dynamic allocation
+
+    dyninit(&aDyn);                    // clear structure
                                        
-CviStr  aDSN;                          // DSN to use
+    aDyn.__ddname = TempDD;            // DD
+    aDyn.__dsname = TempDSN;           // DSN
+    aDyn.__status = __DISP_SHR;        // share
+    aDyn.__normdisp = __DISP_KEEP;     // keep
 
-if (strlen(aLocalDsn) != 0)            // if set
+    dynalloc(&aDyn);                   // allocate
 
-    aDSN.Set(aLocalDsn);               // use local DSN
+    MemberList memberList;             // DSN member list
+                                       
+    TRACE("Reading templates from %s\n",
+      (const char *) aTempDSN);
 
-else                                   // otherwise
+    Member *aMember = memberList.GetMembers(TempDD);
 
-    aDSN.Set("TEMPLATE");              // use TEMPLATE DD
+    if (memberList.Failed())
+    {
+        Error("Unable to read %s.\n",
+              aTempDSN);
 
-memberList.setFile((const char *) aDSN); // set DD/DSN name
+        aRc = 8;                       // failure
+    }
 
-TRACE("Reading templates from %s\n",
-      (const char *) aDSN);
+    while (aRc == 0 &&                 
+           aMember != NULL)            // for all members
 
-while (aRc == 0 &&
-       memberList.List())              // if list is good
+    {                                  // begin read member
                                        
-{                                      // begin process members
-                                       
-    TRACE("Reading template members.\n");
-                                       
-    const CCollVectorExt<BmcString> & members = 
-       memberList.getMemberSet();      
-                                       
-    const BmcString* pMem;             // member name
-                                       
-    CConstCollVectorExtIter<BmcString> iter( members );
-                                       
-    TRACE("Processing %d members.\n",
-          members.ItemCount());     
-
-//    Print("CviStr_ReallocCount: %d\n", CviStr_ReallocCount);
-                                       
-    for ( pMem = iter.First();         // iterate through
-          pMem;                        // all of the
-          pMem = ++iter )              // members
-                                       
-    {                                  // begin process member
-                                       
-        CviStr aStr = pMem->Cptr();    // get into our string format
+        CviStr aStr = 
+            (const char *) *aMember;   // get into our string format
 
         if (AddList(aTempList,         // if we haven't processed a member
                     aStr))             // by this name yet
 
            aRc = BuildStep(aStr,       // build it
-                           aDSN);      // DSN to use
+                           TempDD);    // DSN to use
 
-        if (aRc != 0)                  // if failed
-                                       
-            break;                     // exit loop
-                                       
-    };                                 // end process member
-                                       
-    TRACE("Found %d templates representing %d steps\n",
-          itsTempCount,                
-          itsRealCount);               
-                                       
-    Print("Read %d templates.\n",     
-          itsTempCount);               
+        aMember = aMember->GetNext();  // next!
 
-    if (aLocalTemps == NULL)           // if we are finished
+    };                                 // end read member
 
-        break;                         // end loop
+    aTempDSN = aTempDSNList.Tok(",");  // next!
 
-    else                               // otherwise
-
-    {                                  // switch to TEMPLATE DD
-
-        aDSN.Set("TEMPLATE");          // use template DD
-
-        memberList.setFile((const char *) aDSN); // set DD/DSN name
-
-        TRACE("Reading templates from %s\n",
-              (const char *) aDSN);
-
-        aLocalTemps = NULL;            // clear
-                                       
-    };                                 // end switch to TEMPLATE DD
-
-//    Print("CviStr_ReallocCount: %d\n", CviStr_ReallocCount);
-                                       
-};                                     // end process members
-                                       
-if (itsTempStream != NULL)             // if allocated
-
-{                                      // begin delete
-
-    itsTempStream->close();            // close stream
-                                       
-    delete itsTempStream;              // remove stream
-
-    itsTempStream = NULL;              // prevent free memory reuse
-
-};                                     // end delete
-                                       
-if (itsTempDSN != NULL)                // if allocated
-
-   delete itsTempDSN;                  // delete DSN
-
-itsTempDSN = NULL;                     // clear
+};                                     // end process DSN
 
 itsStepNames.Reset();                  // clear out step list memory
                                        
-if (aLocalTemps != NULL)               // if we didn't read override
-
-{                                      // begin complain
-
-    Error("UNABLE TO READ FROM OVERRIDE DSN %s\n",
-          (const char *) aLocalTemps->Value());
-
-    aRc = 8;                           // failed
-
-};                                     // end complain
-
 Print("\n");                           // skip a line
 
 
 return(aRc);                           // return result
 
 }                                      // end ReadTemplates
-
-//****************************************************************************
-//
-// Method       : BuildWorkflow::CleanupJCLOut
-//
-// Description  : Cleanup JCL out
-//
-//****************************************************************************
-int BuildWorkflow::CleanupJCLOUT(void)      
-
-{                                      // begin ReadTemplates
-
-int aRc = 0;                           // all OK for now
-
-CviStr aTempList;                      // templates process
-MemberList memberList;                 // DSN member list
-
-
-fileds  aJCLDSN;                       // DSN
-
-
-Print("Cleaning out JCLOUT\n");
-
-const char *aDSN = strstr(itsJclOut, ":");
-
-if (aDSN != NULL)                      // if OK
-
-{                                      // begin setup DSN
-
-     aDSN ++;                          // skip past : 
-     aJCLDSN.file(aDSN);               // set filename
-
-     aJCLDSN.open();                   // open
-
-     memberList.setFile(aDSN);         // set DD/DSN name
-
-};                                     // end setup DSN
-
-if (memberList.List())                 // if list is good
-                                       
-{                                      // begin process members
-                                       
-    TRACE("Reading JCLOUT members.\n");
-                                       
-    const CCollVectorExt<BmcString> & members = 
-       memberList.getMemberSet();      
-                                       
-    const BmcString* pMem;             // member name
-                                       
-    CConstCollVectorExtIter<BmcString> iter( members );
-                                       
-    TRACE("Processing %d members.\n",
-          members.ItemCount());     
-
-//    Print("CviStr_ReallocCount: %d\n", CviStr_ReallocCount);
-                                       
-    for ( pMem = iter.First();         // iterate through
-          pMem;                        // all of the
-          pMem = ++iter )              // members
-                                       
-    {                                  // begin process member
-                                       
-        CviStr aStr = pMem->Cptr();    // get into our string format
-
-        aRc = aJCLDSN.deleteMember(aStr); // remove member
-
-        if (aRc != 0)                  // if failed
-
-        {
-
-            Print("ERROR: Cannot remove member %s(%s)\n",
-                  aDSN,
-                  (const char *) aStr);
-
-            break;                     // exit loop
-
-        }
-                                       
-                                       
-    };                                 // end process member
-
-    aJCLDSN.close();                   // close
-                                       
-};                                     // end process members
-                                       
-
-return(aRc);                           // return result
-
-}                                      // end ReadTemplates
-
-
 
 //****************************************************************************
 //
@@ -13749,6 +12858,7 @@ if (aTok != NULL)                      // if OK
     
     itsPropVars->Add("CUR_SECOND",     // add second
                     aTok);
+
 aUniqueNum.Print("${CUR_YEAR}${CUR_MONTH}${CUR_MDAY}${CUR_HOUR}${CUR_MINUTE}${CUR_SECOND}%d",
                  itsAsid);
 
@@ -13758,15 +12868,14 @@ itsPropVars->ReplaceWithValues         // setup unique number
 itsPropVars->Add("UNIQUE_NUM",         // add
                 aUniqueNum);           // unique number
 
-
-
 aUniqueNum.Reset();                    // reset to reuse
 
 aUniqueNum.Print("${CUR_YEAR}${CUR_MONTH}${CUR_MDAY}${CUR_HOUR}${CUR_MINUTE}${CUR_SECOND}",
                  itsAsid);
 
 itsPropVars->ReplaceWithValues         // setup unique number
-                (aUniqueNum);
+                (aUniqueNum,
+                 false);
 
 ToBase(aUniqueNum, 36);                // convert to base 36
 
@@ -13777,6 +12886,8 @@ TRACE("BASE36_TIME: %s\n", (const char *) aUniqueNum);
 
 
 CviStr aSysplex("&SYSPLEX");           // replace sysplex
+TRACE("SYSPLEX: %s\n", (const char *) aSysplex);
+
 aSysplex.ReplaceSymbols();
 itsPropVars->Add("_WORKFLOW-sysplexName", aSysplex);
 itsPropVars->Add("_workflow-sysplexName", aSysplex);
@@ -13790,16 +12901,30 @@ itsPropVars->Add("_workflow-systemName", aSystem);
 itsPropVars->Add("_workflow-workflowOwnerUpper", GetTaskCviPgm()->GetUser());
 itsPropVars->Add("_WORKFLOW-WORKFLOWOWNERUPPER", GetTaskCviPgm()->GetUser());
 
+char aDsName[45];
+char aMember[9];
+char aRecFm;
+int aRecL;
+int aBlksize;
 
-fileds aStep;
-aStep.file("STEPLIB");                 // get our STEPLIB DD
-aStep.connect();
+#ifdef _SRC_
+FILE *aFp = fopen("DD:STEPLIB", "r");
 
-itsPropVars->Add("WORKFLOW_DSN",       // add workflow DSN
-                aStep.getdsname());
+if (osddinfo("STEPLIB",
+             aDsName,
+             aMember,
+             &aRecFm,
+             &aRecL,
+             &aBlksize) == 0)
 
-aStep.disconnect();
+{
 
+    itsPropVars->Add("WORKFLOW_DSN",   // add workflow DSN
+                    aDsName);
+
+}
+
+#endif
 
 return(aRc);                           // return result
 
@@ -13817,7 +12942,53 @@ int BuildWorkflow::GenerateWF(const char *theOut,
 
 {                                      // begin GenerateWF
 
-FILE *aOutFp = fopen(theOut, "wt");
+CviStr aDD("WFBLDOUT");
+CviStr aDSN;
+CviStr aMem;
+CviStr aName(theOut);
+
+const char *aPtr = aName.Tok("//'(", 3);  // get DSN name
+
+if (aPtr != NULL)                      // if OK
+
+{                                      // begin have DSN
+
+    aDSN.Set(aPtr);                    // set DSN name
+
+    aPtr = aName.Tok(")'");            // get member name
+
+    if (aPtr != NULL)                  // if good
+
+        aMem.Set(aPtr);                // use member name
+
+};                                     // end have DSN
+
+__dyn_t aDyn;                          // dynamic allocation
+
+dyninit(&aDyn);                        // clear structure
+                                   
+aDyn.__ddname = aDD;                   // DD
+aDyn.__dsname = aDSN;                  // DSN
+aDyn.__status = __DISP_SHR;            // share
+aDyn.__normdisp = __DISP_KEEP;         // keep
+aDyn.__misc_flags = __CLOSE;           // close when finished
+
+int aFc = dynalloc(&aDyn);                       // allocate
+
+CviStr aOut;
+
+Trace("DYNALLOC %s(%s) for %s(%s) - %d\n",
+      (const char *) aDD,
+      (const char *) aMem,
+      (const char *) aDSN,
+      (const char *) aMem,
+      aFc);
+
+aOut.Print("DD:%s(%s)",
+           (const char *) aDD,
+           (const char *) aMem);
+
+FILE *aOutFp = fopen(aOut, "w,recfm=*");
 
 int aRc = 0;                           // return code
 
@@ -13857,6 +13028,7 @@ if (aOutFp != NULL)                    // if opened
             {                          // begin grab variable name
 
                 aWorkflowXML.Add(aLine); // copy line as-is
+                aWorkflowXML.Add("\n");  // add newline
 
                 char *aPtr = strstr(aLine, "name=\"");
 
@@ -13874,6 +13046,24 @@ if (aOutFp != NULL)                    // if opened
 
                     *aEnd = 0;         // terminate
 
+                    char *aScope = strstr(aEnd+1, "scope=\"");
+
+                    if (aScope != NULL)
+
+                    {
+
+                        aScope = strstr(aScope, "\"") + 1;
+
+                        aEnd = aScope + 1;
+
+                        while (*aEnd != 0 &&  // find ending quote
+                               *aEnd != '\"')
+                            aEnd ++;
+
+                        *aEnd = 0;         // terminate
+
+                    }
+
                     TRACE("Variable found: %s\n", aPtr);
 
                     // Why do this? Because a workflow may have variables and the templates
@@ -13881,7 +13071,20 @@ if (aOutFp != NULL)                    // if opened
                     // add instance- prefixes to them.
                     // In practice, we do not seem to be using any workflow variables.
 
-                    itsWfVars.Add(aPtr, NULL, 1); // add, reject duplicate
+                    if (aScope != NULL)
+                    {
+                        TRACE("Scope: %s\n", aScope);
+                        CviStr aFullName;
+
+                        aFullName.Print("%s-%s",
+                                        aScope,
+                                        aPtr);
+                        itsWfVars.Add(aFullName, NULL, 1); // add, reject duplicate
+                    }
+                    else
+                    {
+                        itsWfVars.Add(aPtr, NULL, 1); // add, reject duplicate
+                    }
 
                 };                     // end grab name
 
@@ -13896,13 +13099,23 @@ if (aOutFp != NULL)                    // if opened
 
                 CviStr aStepXML;       // step XML
 
+                aPrev = NULL;          // reset previous
+
+                WorkflowStep *aTranslates = NULL;
+
+                if (theGroup->GetTarget() ==      // if this will be
+                      TARGET_DEPLOYMENT)          // intended for deployment time
+
+                    aTranslates = itsTranslates;  // perform translations, if available
+
                 if (theGroup != NULL)
 
                    theGroup->GenGroup  // generate for group
                         (aStepXML,     // Top level is a 'root' group
                          &itsWfVars,   // and itself shouldn't be written so
                          itsPropVars,  // that's why we call GenGroup and not GenXML
-                         itsMacros);   
+                         itsMacros,
+                         aTranslates);
 
                 Variable *aPrompt = itsWfVars.GetFirst();
 
@@ -13935,24 +13148,19 @@ if (aOutFp != NULL)                    // if opened
                             aWorkflowXML.Print("<variable name=\"%s\" scope=\"instance\" visibility=\"private\">\n",
                                                  aPrompt->GetPropName());
 
-                        TRACE("P2\n");
                         aWorkflowXML.Print(" <label>%s</label>\n",
                                              (const char *) aPrompt->FindSubVar("LABEL")->Value());
 
-                        TRACE("P3\n");
                         aWorkflowXML.Print(" <abstract>%s</abstract>\n",
                                              (const char *) aPrompt->FindSubVar("ABSTRACT")->Value());
 
 
-                        TRACE("P4\n");
                         aWorkflowXML.Print(" <description>%s</description>\n",
                                              (const char *) aPrompt->FindSubVar("DESCRIPTION")->Value());
 
-                        TRACE("P5\n");
                         aWorkflowXML.Print(" <category>%s</category>\n",
                                              (const char *) aPrompt->FindSubVar("CATEGORY")->Value());
 
-                        TRACE("P6\n");
                         Variable *aTypeVar = aPrompt->FindSubVar("TYPE");
 
                         CviStr aAttr;    // attributes
@@ -13969,7 +13177,6 @@ if (aOutFp != NULL)                    // if opened
 
                         {
 
-                            TRACE("P7\n");
                             if (!strcmp("HLQ", aTypeVar->Value()))
                             {
                                 aType = "string";
@@ -14051,11 +13258,9 @@ if (aOutFp != NULL)                    // if opened
                                 }
 
                             }
-                            TRACE("P8\n");
 
                         }
 
-                        TRACE("P9\n");
                         if (aValidation == NULL &&
                             aPrompt->FindSubVar("VALIDATION") != NULL)
 
@@ -14065,19 +13270,16 @@ if (aOutFp != NULL)                    // if opened
 
                         }
 
-                        TRACE("P10\n");
                         if (!strcmp(aType, "string") &&
                             strlen(aAttr) == 0)
                         {
                             aAttr.Set("valueMustBeChoice=\"false\" multiLine=\"false\"");
                         }
 
-                        TRACE("P11\n");
                         aWorkflowXML.Print(" <%s %s>\n",
                                              aType,
                                              (const char *) aAttr);
 
-                        TRACE("P12\n");
                         if (aValidation != NULL && strlen(aValidation) > 0)
 
                                 aWorkflowXML.Print("   <validationType>%s</validationType>\n",
@@ -14087,7 +13289,6 @@ if (aOutFp != NULL)                    // if opened
                         if (!strcmp(aType, "string"))
                         {
 
-                            TRACE("P13\n");
                             if (aPrompt->FindSubVar("MINLEN") != NULL)
                                 aMinLen = atoi(aPrompt->FindSubVar("MINLEN")->Value());
 
@@ -14099,14 +13300,11 @@ if (aOutFp != NULL)                    // if opened
 
                             aWorkflowXML.Print("   <maxLength>%d</maxLength>\n",
                                                  aMaxLen);
-                            TRACE("P14\n");
-
                         }
                         else
                         if (!strcmp(aType, "integer"))
                         {
 
-                            TRACE("P13\n");
                             if (aPrompt->FindSubVar("MINVAL") != NULL)
                                 aWorkflowXML.Print("   <minValue>%d</minValue>\n",
                                                    atoi(aPrompt->FindSubVar("MINVAL")->Value()));
@@ -14117,18 +13315,14 @@ if (aOutFp != NULL)                    // if opened
 
                         }
 
-
-                        TRACE("P15\n");
                         if (strlen(aChoices) > 0)
 
                             aWorkflowXML.Add(aChoices);
 
-                        TRACE("P16\n");
                         if (aPrompt->FindSubVar("DEFAULT") != NULL)
                             aWorkflowXML.Print("   <default>%s</default>\n",
                                                  (const char *) aPrompt->FindSubVar("DEFAULT")->Value());
 
-                        TRACE("P17\n");
                         aWorkflowXML.Print(" </%s>\n", aType);
 
                         aWorkflowXML.Print(" </variable>\n");
@@ -14194,9 +13388,10 @@ if (aOutFp != NULL)                    // if opened
 
                     aDefault.ParseData(aDefTemp, itsPropVars);
 
-
-                    aDefault.GenXML(aStepXML, &itsWfVars, itsPropVars, itsMacros);
-
+                    aDefault.GenXML(aStepXML, &itsWfVars,
+                                    itsPropVars,
+                                    itsMacros,
+                                    itsTranslates);
 
                 };                     // end add a default step
 
@@ -14287,7 +13482,7 @@ int aRc = 0;                           // return code
 
 WorkflowStep *aGroup = itsGroups->GetGrpOrderChild(); // get top group
 
-while (aGroup != NULL)                 // for all groups
+while (aRc == 0 && aGroup != NULL)     // for all groups
 
 {                                      // begin generate deployment WFs
                                        
@@ -14300,11 +13495,12 @@ while (aGroup != NULL)                 // for all groups
 
         CviStr aWfName;                // WF name
 
-        aWfName.Print("//DD:WFOUT(%s)",
+        aWfName.Print("//'%s(%s)'",
+                      (const char *) itsWorkflowDSN,
                       (const char *) aGroup->GetName());
-
-        GenerateWF(aWfName,            // generate
-                   aGroup);
+                                       
+        aRc = GenerateWF(aWfName,      // generate
+                         aGroup);      
 
     }                                  // end new workflow
 
@@ -14319,112 +13515,6 @@ return(aRc);                           // return result
 
 //****************************************************************************
 //
-// Method       : BuildWorkflow::GenerateReRun
-//
-// Description  : Re-run templates with some user overrides
-//
-//****************************************************************************
-int BuildWorkflow::GenerateReRun(void)      
-
-{                                      // begin GenerateReRun
-
-FILE *aFp = fopen("//DDN:RERUN", "rt");
-
-int aRc = 0;                           // return code
-
-
-itsGenMembers = true;                  // generate members
-
-Print("Processing rerun steps.\n");
-
-if (aFp != NULL)                       // if opened
-
-{                                      // begin read data
-
-    CviStr aContent;                   // read content
-    CviStr aStepList;                  // step list
-
-    char aBuffer[512];                 // input data
-
-    while (fgets(aBuffer,              // while we have
-                 sizeof(aBuffer),      // read more
-                 aFp) != NULL)         // data
-                                       
-        aContent.Add(aBuffer);         // add to content
-
-    fclose(aFp);                       // close file
-
-    aFp = NULL;                        // prevent accidental reuse
-
-    const char *aLine = aContent.Tok("\n");
-
-    while (aLine != NULL)              // for all lines
-
-    {                                  // begin process line
-                                       
-        CviStr aStepName(aLine);       // step name
-
-        aStepName.Trim(' ');           // trim trailing spaces
-
-        Print("Adding %s to rerun list\n",
-              (const char *) aStepName);
-
-        AddList(aStepList, aStepName); // add to list
-
-        aLine = aContent.Tok("\n");    // next!
-
-    }                                  // end process line
-
-    WorkflowStep *aStep = itsSteps;    // get step list
-
-    while (aStep != NULL)              // for all steps
-
-    {                                  // begin process selected steps
-
-        Print("Checking %s\n", (const char *) aStep->GetName());
-
-        if (!aStep->Bypassed() &&      // if not bypassed and
-            InList(aStepList,          // it is in the
-                   aStep->GetName()))  // list of steps to process
-
-        {                              // begin generate
-
-            Print("Executing %s\n", (const char *) aStep->GetName());
-
-            CviStr aXML;               // throw away XML
-
-            aStep->GenXML(aXML,        // generate output
-                          &itsWfVars,
-                          itsPropVars,
-                          itsMacros);
-                                       
-
-        }                              // end generate
-
-        aStep = aStep->GetNext();      // next!
-
-    }                                  // end process selected steps
-
-}                                      // end read data
-
-else                                   // otherwise
-                                       
-{                                      // begin fail
-                                       
-    Error("Could not open RERUN DD\n");
-                                       
-    aRc = 8;                           // hard failure
-                                       
-};                                     // end fail
-
-
-return(aRc);                           // return result
-
-}                                      // end GenerateReRun
-
-
-//****************************************************************************
-//
 // Method       : BuildWorkflow::BuildStep
 //
 // Description  : Build a step
@@ -14432,8 +13522,8 @@ return(aRc);                           // return result
 // Parameters   : 1) Member name to process
 //
 //****************************************************************************
-int BuildWorkflow::BuildStep(CviStr &theMember,
-                             CviStr &theDSN)
+int BuildWorkflow::BuildStep(const char *theMember,
+                             const char *theDSN)
 
 {
 
@@ -14442,55 +13532,23 @@ int aRc = 0;                           // OK so far
 TRACE("Processing member %s\n",        // give a little
       (const char *) theMember);       // diagnostic information
 
-// The following open/close code probably belongs in the calling function
-// and it should pass the stream in...but...it evolved and this is where
-// it is for now...
 
-if (strlen(theDSN) != 0             && // if we need to open new name
-    itsTempDSN != NULL)                // and allocate  
+CviStr aName;
 
-{                                      // begin close previous
 
-   TRACE("Closing old template stream.\n");
+if (strstr(theDSN, ".") == NULL)
+    aName.Print("DD:%s(%s)",
+                (const char *) theDSN,
+                (const char *) theMember);
+                
+else
+    aName.Print("//'%s(%s)'",
+                (const char *) theDSN,
+                (const char *) theMember);
 
-   itsTempStream->close();             // close stream
+FILE *aFp = fopen(aName, "r,samethread");
 
-   delete itsTempStream;               // close stream
-
-   if (itsTempDSN != NULL)             // if allocated
-
-      delete itsTempDSN;               // delete DSN object
-
-   itsTempStream = NULL;               // mark unallocated
-
-   itsTempDSN = NULL;                  // mark unallocated
-
-};                                     // end close previous
-
-if (strlen(theDSN) != 0)               // if DSN set
-
-{                                      // begin open
-
-   itsTempDSN = new fileds;            // allocate new one
-
-   itsTempStream = new filestream(itsTempDSN); // allocate new stream
-
-   Print("Opening %s\n", (const char *) theDSN);
-
-   itsTempDSN->file(theDSN);           // we will open DSN or DD
-
-   itsTempStream->open(ios::in);       // try to open
-
-   theDSN.Reset();                     // do not attempt reopen
-
-};                                     // end open
-
-if (itsTempDSN != NULL)                // if allocated
-                                       
-    itsTempDSN->newmember(theMember);  // set member to use
-
-if (itsTempStream != NULL &&           // if allocated and
-    itsTempStream->good())             // is it all good?
+if (aFp != NULL)                       // if OK
 
 {                                      // begin read
 
@@ -14500,7 +13558,7 @@ if (itsTempStream != NULL &&           // if allocated and
 
     static CviStr aTempData;           // template data - keep so we retain good buffer size
 
-    aTempData.Truncate();              // truncate, but do not shrink allocation
+    aTempData.Truncate();              // truncate (keep allocated for largest template seen so far)
 
     aCount ++;                         // bump counter
 
@@ -14510,16 +13568,18 @@ if (itsTempStream != NULL &&           // if allocated and
 
     TRACE("Read\n");
 
-    char *aData = itsTempStream->browse();   // get record
+    char aBuffer[8192];
 
-    while (aData != NULL)              // for all data
+    int aRecLen = fread(aBuffer,
+                        1,
+                        sizeof(aBuffer),
+                        aFp);
+
+    while (aRecLen > 0)                // for all data
 
     {                                  // begin read in data
                                        
-        int   aRecLen =                // get length of data 
-            itsTempStream->gcount();  
-
-        aTempData.Add(aData, aRecLen); // append new data
+        aTempData.Add(aBuffer, aRecLen); // append new data
 
         if (aFirstRec &&               // if first record and
             strlen(aTempData) !=       // must have
@@ -14530,7 +13590,7 @@ if (itsTempStream != NULL &&           // if allocated and
             TRACE("Rejecting %s: appears to be binary.\n",
                   (const char *) theMember);
 
-            while (itsTempStream->browse() != NULL); // empty buffers
+            aRecLen = 0;               // no more data
 
             break;                     // break out of this while loop
 
@@ -14545,18 +13605,21 @@ if (itsTempStream != NULL &&           // if allocated and
             TRACE("Rejecting %s: appears to be XML.\n",
                   (const char *) theMember);
 
-            while (itsTempStream->browse() != NULL); // empty buffers
+            aRecLen = 0;               // no more data
 
             break;                     // break out of this while loop
 
         };                             // end reject
 
-        aTempData.Trim(' ');           // trim trailing space
-        aTempData += "\n";             // add newline
+        //aTempData.Trim(' ');           // trim trailing space
+        //aTempData += "\n";             // add newline
 
         aFirstRec = false;             // no longer first record
 
-        aData = itsTempStream->browse(); // get more data
+        aRecLen = fread(aBuffer,
+                        1,
+                        sizeof(aBuffer),
+                        aFp);
 
     };                                 // end read in data
 
@@ -14577,6 +13640,8 @@ if (itsTempStream != NULL &&           // if allocated and
         TRACE("Rejecting %s: does not appear to be a template.\n",
               (const char *) theMember);
 
+    fclose(aFp);                       // close member
+
 }                                      // end read
 
 else                                   // otherwise
@@ -14586,10 +13651,6 @@ else                                   // otherwise
     Print("Unable to open template dataset.\n");
 
 };                                     // end error
-
-if (itsTempStream != NULL)             // if allocated?
-
-   itsTempStream->clear();             // clear stream status for next member
 
 
 return(aRc);                           // return code holder
@@ -14912,7 +13973,7 @@ return(aRc);                           // return result
 //
 //****************************************************************************
 int BuildWorkflow::CreateStep(CviStr &theData,
-                              CviStr &theName)
+                              const char *theName)
 
 {
 
@@ -15012,13 +14073,24 @@ if (!strcmp(aStep->GetType(),          // if it is a
 
 {                                      // begin add as a prompt
 
-    //itsUsePrompts = true;              // we are using prompts
-
     aStep->SetNext(itsPrompts);        // set current head as tail of new item
 
     itsPrompts = aStep;                // new item is now the head of the list
 
 }                                      // end add as a prompt
+
+else
+
+if (!strcmp(aStep->GetType(),          // if it is a
+            "TRANSLATE"))              // translate template
+
+{                                      // begin add as a translate template
+
+    aStep->SetNext(itsTranslates);     // set current head as tail of new item
+
+    itsTranslates = aStep;             // new item is now the head of the list
+
+}                                      // end add as a translate template
 
 else
 
@@ -15522,6 +14594,60 @@ return(aRc);                           // return
 
 //****************************************************************************
 //
+// Method       : BuildWorkflow::ProcessTranslates
+//
+// Description  : Process TRANSLATE templates
+//
+// Parameters   : None
+//
+//****************************************************************************
+int BuildWorkflow::ProcessTranslates()
+
+{
+
+int aRc = 0;                           // OK so far
+
+
+Print("Processing translation definitions.\n");
+
+WorkflowStep *aStep = itsTranslates;   // TRANSLATE steps
+
+while (aRc == 0 &&
+       aStep != NULL)                  // for all steps
+
+{                                      // begin process step
+
+    if (!aStep->Bypassed())            // if not bypassed
+
+    {                                  // begin process DATASET_LIST
+
+        aStep->ProcessStatements(itsPropVars,
+                                 itsIncludes,
+                                 itsWfMacros);
+
+        aStep->ProcessIntMacros(itsPropVars);
+
+        CviStr aContent(aStep->GetContent());
+
+        itsPropVars->                  // replace with values
+           ReplaceWithValues(aContent, // but do NOT escape
+                             false);   // values...
+
+        aStep->SetContent(aContent);   // set new content
+
+    }                                  // emd process DATASET_LIST
+
+    aStep = aStep->GetNext();          // next!
+
+}                                      // end process step
+
+
+return(aRc);                           // return
+
+}
+
+//****************************************************************************
+//
 // Method       : BuildWorkflow::ProcessPopulate
 //
 // Description  : Process Populate templates
@@ -15731,16 +14857,10 @@ while (aStep != NULL)                  // for all steps
 
                             aConditions.Print("\n%s", (const char *) aCond);
 
-                            if (itsUsePrompts)
-
-                                aOK = true;
-
-                            else
-
-                                aOK = EvaluateExpression(aCond,
-                                                         aStep,
-                                                         itsPropVars,
-                                                         aReason);
+                            aOK = EvaluateExpression(aCond,
+                                                     aStep,
+                                                     itsPropVars,
+                                                     aReason);
 
                             TRACE("FOUND POPULATION CONDITIONAL %s. Result %d, %s\n",
                                   (const char *) aCond,
@@ -15988,10 +15108,6 @@ while (aStep != NULL)                  // for all steps
 
                                 aDataset->MarkNeeded();
 
-                                if (itsUsePrompts)
-
-                                    aDataset->SetCondition(aConditions);
-
                                 aDataset = NULL; // do nothing more with it
 
                             };
@@ -16034,9 +15150,6 @@ while (aStep != NULL)                  // for all steps
                                 TRACE("Marking %s as needed - no FROM value.\n",
                                       (const char *) aDataset->GetID());
 
-                                if (itsUsePrompts)
-                                   aDataset->SetCondition(aConditions);
-
                                 aDataset->MarkAllocate(); // it needs to be allocated
 
                             }
@@ -16071,75 +15184,12 @@ while (aStep != NULL)                  // for all steps
                                       (const char *) aDataset->GetID(),
                                       (const char *) aDataset->GetDSN());
 
-                                if (itsUsePrompts)
-
-                                    aDataset->SetCondition(aConditions);
-
                                 aDataset->AddPopulate(aPopId,
                                                       aDSN);
 
                                 aDSN = aFromDSN.Tok(",");
 
                             }
-
-                            if (itsUsePrompts)      // if using prompts, DSN will be Velocity script
-
-                            {                       // begin generate variable w/script
-
-                                Variable *aVar = itsPropVars->GetVariable(aPopId);
-
-                                CviStr aDsnScript;
-
-                                if (aVar != NULL)
-
-                                    TRACE("Previous variable: %s\n",
-                                          (const char *) aVar->Value());
-
-                                if (aVar != NULL &&            // if previously set and
-                                    strlen(aVar->Value()) > 4) // it is large enough to have script
-
-                                    aDsnScript.Add(aVar->Value(), // grab all but the #end statement so it can become #else
-                                                   strlen(aVar->Value()) - 4);
-
-                                CviStr aVelocity;
-
-                                if (strlen(aCond) == 0) 
-                                    
-                                    aVelocity.Set("true");
-
-                                else
-
-                                    RewriteExpression(aCond,
-                                                      NULL,
-                                                      itsPropVars,
-                                                      aVelocity);
-
-                                if (strlen(aDsnScript) != 0)
-
-                                    aDsnScript.Print("#elseif (\n %s \n)",
-                                                     (const char *) aVelocity);
-
-                                else
-
-                                    aDsnScript.Print("#if (\n %s \n)",
-                                                     (const char *) aVelocity);
-
-                                aDsnScript.Add(aDsnName);
-
-                                aDsnScript.Add("#end");
-
-                                TRACE("Adding POP ID %s, script %s\n",
-                                      (const char *) aPopId,
-                                      (const char *) aDsnScript);
-
-                                itsPropVars->Add    // add or update variable
-                                    (aPopId,
-                                     aDsnScript,
-                                     2);
-
-                            }                       // end generate variable w/script
-
-                            else
 
                             if (itsPropVars->Add    // add POPID variable
                                    (aPopId,
@@ -16203,19 +15253,12 @@ while (aStep != NULL)                  // for all steps
 
                             }
 
-                            if (!itsUsePrompts)
-                            {
-                                aTags.Reset();
-                                aPopId.Reset();
-                                aToDSN.Reset();
-                                aFromDSN.Reset();
-                                aHLQPrefix.Reset();
-                                aDynSuffix.Reset();
-                            }
-                            else
-                            {
-                                aFromDSN.Set(aOrigFromDSN); // restore original, could be empty macro
-                            }
+                            aTags.Reset();
+                            aPopId.Reset();
+                            aToDSN.Reset();
+                            aFromDSN.Reset();
+                            aHLQPrefix.Reset();
+                            aDynSuffix.Reset();
 
                         }              // end add population record to dataset
 
@@ -16243,98 +15286,6 @@ TRACE("Finished reading population templates\n");
 return(aRc);                           // return result
 
 }                                      // end ProecssPopulate
-
-//****************************************************************************
-//
-// Method       : BuildWorkflow::SizePopulateThread
-//
-// Description  : Size up population entries. Starting as thread for performance
-//
-// Parameters   : None
-//
-//****************************************************************************
-#pragma prolkey (SizePopulateThread,"DCALL=YES,NOSTDIO=1")
-void * SizePopulateThread(void *theParm, VariableList *theProps)
-
-{
-
-Dataset *theDataset = (Dataset *) theParm;
-
-int aTotMembers = 0;                   // total members
-
-
-Populate *aPop =                       // populate entry
-       theDataset->GetPopulate();      // get population entry
-
-while (aPop != NULL)                   // for all population entries
-
-{                                      // begin process population entry
-
-    CviStr aSrcDSN(aPop->GetSourceDSN());
-
-    if (strlen(aSrcDSN) > 0)           // while good
-
-    {                                  // begin process
-
-        if (strstr(aSrcDSN, "#GetDataset") != NULL)
-
-        {                              // begin translate macro to dataset
-
-            const char *aLLQ =         // get second term using quotes
-                aSrcDSN.Tok("\"", 1);
-
-            if (aLLQ != NULL)          // if valid
-
-            {                          // begin grab DSN from LLQ
-
-                WorkflowStep aStep("TEMP");
-                CviStr aGet;
-                aGet.Print("#TARGET_DSN(%s)", aLLQ);
-
-                // Translate, but we will need it to believe we are
-                // NOT using prompts so we get the real value and not a 
-                // macro...
-                bool aSaveState = itsUsePrompts;    
-                itsUsePrompts = false;
-                MacroIntTargetDSN.Process(aGet, &aStep, theProps, false);
-                itsUsePrompts = aSaveState;
-
-                TRACE("Translated %s to %s\n",
-                      aLLQ, (const char *) aGet);
-
-                aSrcDSN.Set(aGet);     // use it
-
-            };                         // end grab DSN from LLQ
-
-        };                             // end translate macro to dataset
-
-        MemberListProperties memberPropList; // DSN member list
-
-        MemberList  memberList;        // DSN member list
-
-        memberList.setFile             // setup to 
-            ((const char *) aSrcDSN);  // get members
-
-        memberList.List();             // get list of members
-
-        int aMems = memberList.getMemberSet().Entries();
-
-        aPop->SetMemberCnt(aMems);     // save for later trace
-
-        aTotMembers += aMems;          // add member count
-                                       
-    };                                 // end process
-
-    aPop = aPop->GetNext();            // next!
-
-};                                     // end process population entry
-
-theDataset->SetMemberCount(aTotMembers);     // set member count
-
-
-return(NULL);                          // return nothing
-
-}
 
 //****************************************************************************
 //
@@ -16404,41 +15355,6 @@ while (aDataset != NULL             && // for all datasets
 
             CviStr aSrcDSN(aPop->GetSourceDSN());
 
-// Yes, this is a hack...
-// We should handle this more gracefully
-// by adding the real dataset in here somewhere
-            if (strstr(aSrcDSN, "#GetDataset") != NULL)
-
-            {                          // begin translate macro to dataset
-
-                const char *aLLQ =     // get second term using quotes
-                    aSrcDSN.Tok("\"", 1);
-
-                if (aLLQ != NULL)      // if valid
-
-                {                      // begin grab DSN from LLQ
-
-                    WorkflowStep aStep("TEMP");
-                    CviStr aGet;
-                    aGet.Print("#TARGET_DSN(%s)", aLLQ);
-
-                    // Translate, but we will need it to believe we are
-                    // NOT using prompts so we get the real value and not a 
-                    // macro...
-                    bool aSaveState = itsUsePrompts;    
-                    itsUsePrompts = false;
-                    MacroIntTargetDSN.Process(aGet, &aStep, itsPropVars, false);
-                    itsUsePrompts = aSaveState;
-
-                    TRACE("Translated %s to %s\n",
-                          aLLQ, (const char *) aGet);
-
-                    aSrcDSN.Set(aGet); // use it
-
-                };                     // end grab DSN from LLQ
-
-            };                         // end translate macro to dataset
-
             if (GetTracks("TARGET",    // get track data
                           aSrcDSN,
                           aTracks))
@@ -16473,16 +15389,11 @@ while (aDataset != NULL             && // for all datasets
             
         {
 
-            aRc = aDataset->StartThread(SizePopulateThread, itsPropVars);
-
-            if (aRc != 0)              // if failed
-
-                Error("Unable to attach subtask\n");
+            aDataset->GetMemberCount(itsPropVars);
 
         }
 
-
-        aTcbCnt ++;                    // bump TCB count
+//        aTcbCnt ++;                    // bump TCB count
 
         aAllocCnt ++;                  // bump allocation count
 
@@ -16523,7 +15434,8 @@ while (aDataset != NULL             && // for all datasets
 
         {                              // begin wait for tasks
 
-            if (aChkDataset->HasTcb()) // has a TCB?
+#ifdef _SRC_
+            if (aChkDataset->HasThread()) // has a thread?
 
             {                          // begin wait
 
@@ -16540,6 +15452,7 @@ while (aDataset != NULL             && // for all datasets
 
                     SETRC(aRc, 16);    // an ABEND happened...
                 }
+#endif
 
                 const char *aSize =
                     aChkDataset->GenSize();        // compute size info
@@ -16574,8 +15487,9 @@ while (aDataset != NULL             && // for all datasets
                     TRACE("\n");
 
                 };                     // end displsay info
-
+#ifdef _SRC_
             };                         // end wait
+#endif
 
             aChkDataset = aChkDataset->GetNext();    // next!
 
@@ -16595,227 +15509,6 @@ DPRINT("Will allocate %d datasets and populate from %d datasets.\n",
 return(aRc);                           // return result
 
 }
-
-//****************************************************************************
-//
-// Method       : BuildWorkflow::ProcessPromptGroup
-//
-// Description  : Process prompt JSON grouping
-//
-// Parameters   : 1) JSON Entry
-//
-//****************************************************************************
-int BuildWorkflow::ProcessPromptGroup(JSON_Entry *theGrp)
-{
-
-int aRc = 0;
-
-
-while (theGrp != NULL)
-
-{
-
-    JSON_Entry *aGrpName = theGrp->FindChild("name");
-
-    JSON_Entry *aField = theGrp->FindChild("fields");
-
-    if (aField != NULL) aField = aField->GetChild();
-
-    while (aField != NULL)
-
-    {
-
-        JSON_Entry *fieldName = aField->FindChild("fieldName");
-
-        if (fieldName != NULL &&
-            strlen(fieldName->GetValue()) > 0)
-        {
-            TRACE("%s\n", fieldName->GetValue());
-
-            CviStr aPrompt;
-
-            aPrompt.Print("PROMPT=%s\n",
-                          (const char *) fieldName->GetValue());
-
-            aPrompt.Print("CATEGORY=%s\n", aGrpName->GetValue());
-
-            JSON_Entry *aChild = aField->GetChild();
-
-            while (aChild != NULL)
-            {
-                if (strlen(aChild->GetName()) > 0)
-                {
-
-                    const char *aName = aChild->GetName();
-                    const char *aValue = aChild->GetValue();
-
-                    TRACE("   %s\n", (const char *) aName);
-
-                    if (!strcmp(aName, "label"))
-                    {
-                        CviStr aVal(aValue);
-
-                        aVal.Trim(':');
-
-                        aPrompt.Print("LABEL=%s\n", (const char *) aVal);
-                        aPrompt.Print("ABSTRACT=%s\n", (const char *) aVal);
-                        aPrompt.Print("DESCRIPTION=Description\n", (const char *) aVal);
-                    }
-
-                    if (!strcmp(aName, "length") &&
-                        atoi(aValue) > 0)
-
-                    {
-                        aPrompt.Print("MAXLEN=%s\n", aValue);
-                    }
-
-                    if (!strcmp(aName, "default") &&
-                        strlen(aValue) > 0)
-
-                    {
-
-                        JSON_Entry *aOpt = aField->FindChild("options");
-
-                        if (aOpt != NULL) aOpt = aOpt->GetChild();
-
-                        if (aOpt != NULL)
-
-                        {
-
-                            while (aOpt != NULL)
-
-                            {
-
-                                JSON_Entry *aOptName = aOpt->FindChild("name");
-
-                                if (aOptName != NULL &&
-                                    !strcmp(aOptName->GetValue(), aValue))
-
-                                {
-
-                                    aValue = aOpt->FindChild("id")->GetValue();
-
-                                    break;
-
-                                }
-                                else
-                                 aOpt = aOpt->GetSibling();
-
-                            }
-
-                            if (aOpt == NULL) 
-                                aValue = NULL;  // not found
-
-                        }
-
-                        if (aValue != NULL &&
-                            strstr(aValue, "<") == NULL &&
-                            strstr(aValue, "${") == NULL)         // seeding from other fields not supported
-
-                            aPrompt.Print("DEFAULT=%s\n", aValue);
-
-                    }
-
-                    if (!strcmp(aName, "options"))
-
-                    {
-                        aPrompt.Print("TYPE=CHOICE\n");
-
-                        JSON_Entry *aOpt = aChild->GetChild();
-
-                        while (aOpt != NULL)
-
-                        {
-
-                            JSON_Entry *aId = aOpt->FindChild("id");
-
-                            if (aId != NULL)
-
-                               aPrompt.Print("CHOICE=%s\n",
-                                              aId->GetValue());
-
-                            aOpt = aOpt->GetSibling();
-                        }
-                    }
-
-                    if (!strcmp(aName, "allowBlank") &&
-                        !strcmp(aValue, "N"))
-
-                    {
-
-                        TRACE("Required field!\n");
-                        aPrompt.Print("REQUIRED=Y\n"); // cannot be empty
-
-                    }
-
-                    if (!strcmp(aName, "validator"))
-                    {
-
-                        TRACE("   Validator entry %p  child %p\n",
-                               (void *) aChild->GetEntry(),
-                               (void *) aChild->GetChild());
-
-                        JSON_Entry *anEntry = aChild->GetEntry();
-
-                        if (anEntry != NULL)
-
-                        {
-                            const char *aValType = anEntry->GetValue();
-
-                            if (!strcmp(aValue, "DSN"))
-                            {
-                                aPrompt.Print("VALIDATION=DSNAME\n");
-
-                            }
-                            else
-                            if (!strcmp(aValue, "HLQ"))
-                            {
-                                aPrompt.Print("VALIDATION=DSNAME\n");
-
-                            }
-                            else
-
-                            {
-                                TRACE(" Data Type %s unknown - not validating\n",
-                                       aValue);
-
-                                aPrompt.Print("TYPE=string\n");
-                            }
-                        }
-
-                    }
-                }
-
-                aChild = aChild->GetSibling();
-            }
-
-            TRACE("PROMPT DATA:\n%s\n\n",
-                   (const char *) aPrompt);
-
-            CreatePrompt(aPrompt);
-
-        }
-
-        aField = aField->GetSibling();
-
-    }
-
-    JSON_Entry *aGrp = theGrp->FindChild("products");
-
-    if (aGrp != NULL) aGrp = aGrp->GetChild();
-
-    if (aGrp != NULL)
-        ProcessPromptGroup(aGrp);
-
-    theGrp = theGrp->GetSibling();
-
-}
-
-
-
-return(aRc);
-
-};
 
 //****************************************************************************
 //
@@ -16912,196 +15605,7 @@ while (aRc == 0 &&                     // while OK and
 
 };                                     // end process template
 
-#ifdef _SRC_
-
-//
-//
-//  Try to get info from *JSON files
-//
-//
-
-
-MemberList memberList;                 // DSN member list
-
-memberList.setFile("TEMPLATE");        // use TEMPLATE DD
-
-if (memberList.List())                 // if list is good
-
-{                                      // begin process list
-
-    const CCollVectorExt<BmcString> & members = 
-       memberList.getMemberSet();      
-
-    const BmcString* pMem;             // member name
-
-    CConstCollVectorExtIter<BmcString> iter( members );
-
-    for ( pMem = iter.First();         // iterate through
-          pMem;                        // all of the
-          pMem = ++iter )              // members
-
-    {                                  // begin process member
-
-        CviStr aStr = pMem->Cptr();    // get into our string format
-
-        if (strstr(aStr, "JSON") != NULL)
-
-        {
-
-            CviStr aContent;
-
-            fileds aDSN;
-            filestream aStream(&aDSN);
-
-
-            aDSN.file("TEMPLATE");
-            aStream.open(ios::in);
-            aDSN.newmember(aStr);
-
-            const char *aData = NULL;
-
-            while (aStream.good() &&
-                   (aData = aStream.browse()) != NULL)
-            {
-                int aLen = aStream.gcount();
-
-                CviStr aAscii(aData, aLen);
-
-                aAscii.ToEBCDIC();
-
-                aContent.Add(aAscii);
-                //aContent += "\n";
-
-            };
-
-            TRACE("MEMBER %s\nCONTENT:\n%s\n\n",
-                   (const char *) aStr,
-                   (const char *) aContent);
-
-            JSON_Entry *aDoc = (JSON_Entry *) ParseJSON(aContent);
-
-
-            JSON_Entry *aProds = aDoc->FindEntry("products");
-
-            if (aProds != NULL)  aProds->FindChild("products");
-
-            if (aProds != NULL)
-
-            {
-
-                JSON_Entry *aGroup = aProds->GetChild();
-
-                ProcessPromptGroup(aGroup);
-
-            }
-
-            if (aDoc != NULL)
-
-               delete aDoc;
-
-            aDoc = NULL;
-
-            aStr.Replace("JSON", "HELP");
-
-            aStream.clear();             // clear stream status for next member
-
-            aDSN.newmember(aStr);
-
-            aContent.Reset();
-
-            TRACE("Opening %s\n", (const char *) aStr);
-
-            while (aStream.good() &&
-                   (aData = aStream.browse()) != NULL)
-            {
-                int aLen = aStream.gcount();
-
-                CviStr aAscii(aData, aLen);
-
-                aAscii.ToEBCDIC();
-
-                aContent.Add(aAscii);
-
-            };
-
-            TRACE("Parsing %s\n", (const char *) aContent);
-
-            aDoc = (JSON_Entry *) ParseJSON(aContent);
-
-            if (aDoc != NULL)
-
-            {
-
-                JSON_Entry *anEntry = aDoc->GetChild();
-
-                TRACE("PARSED - First child %p\n", (void *) anEntry);
-
-                while (anEntry != NULL)
-
-                {
-
-                    JSON_Entry *aContext = anEntry->FindChild("contextId");
-                    JSON_Entry *aText = anEntry->FindChild("helpText");
-
-                    if (aContext != NULL)
-
-                    {
-
-                        const char *aVarN = strstr(aContext->GetValue(), ".");
-
-                        if (aVarN != NULL)
-
-                        {
-
-                            aVarN++;
-
-                            Variable *aVar = itsWfVars.GetVariable(aVarN);
-
-                            if (aVar != NULL)
-
-                            {
-
-                                Variable *aDesc = aVar->FindSubVar("DESCRIPTION");
-                                Variable *aLabel = aVar->FindSubVar("LABEL");
-
-                                if (aDesc != NULL)
-                                {
-                                    CviStr aData(aText->GetValue());
-
-                                    aData.Replace("&", "&amp;");          // escape &
-                                    aData.Replace("<", "&lt;");           // escape <   
-                                    aData.Replace(">", "&gt;");           // escape >
-                                    aData.Replace("\"", "&quot;");        // escape "
-                                    aData.Replace("'", "&apos;");         // escape '
-
-                                    aDesc->SetValue(aData);
-                                }
-
-
-                                if (aLabel != NULL)
-
-                                    aLabel->SetValue(aVarN);
-
-                            };
-
-                        }
-
-                    }
-
-                    anEntry = anEntry->GetSibling();
-
-                };
-
-                delete aDoc;
-
-            };
-
-        };
-
-    };                                 // end process member
-
-};                                     // end process list
-#endif
+itsWfVars.SortByNumber("SORT_ORDER");
 
 
 return(aRc);                           // return status
@@ -17521,6 +16025,9 @@ int BuildWorkflow::ProcessStatements()
 
 int aRc = 0;                           // all is well
 
+
+TRACE("TRACE PLACE 20\n");
+
 WorkflowStep *aStep = itsSteps;        // start with head of step list
 
 while (aRc == 0 &&                     // while OK and
@@ -17557,11 +16064,15 @@ while (aRc == 0 &&                     // while OK and
 
 };                                     // end process includes
 
+TRACE("TRACE PLACE 21\n");
+
 aStep = itsSteps;                      // locate all dynamic steps, adjust deps
 
 while (aStep != NULL)                  // for all steps
 
 {                                      // begin find base steps
+
+    TRACE("TRACE PLACE 21.1\n");
 
     WorkflowStep *aBase =              // get base
         aStep->BaseStep();             // step
@@ -17569,20 +16080,38 @@ while (aStep != NULL)                  // for all steps
     WorkflowStep *aDepStep =           // locate base dependency in all steps
         itsSteps;
 
+    TRACE("TRACE PLACE 21.2\n");
+
     while (aBase != NULL &&            // while we have a base and
            aDepStep != NULL)           // steps are found
 
     {                                  // begin update deps
 
+        TRACE("TRACE PLACE 21.3: %p %p %p\n",
+              (void *) aBase,
+              (void *) aDepStep,
+              (void *) aStep);
+
         aDepStep->AddToBaseDeps(aStep); // add to base dependencies
+
+        TRACE("TRACE PLACE 21.4\n");
 
         aDepStep = aDepStep->GetNext();// next!
 
+        TRACE("TRACE PLACE 21.5\n");
+
     };                                 // end update deps
+
+    TRACE("TRACE PLACE 21.6\n");
 
     aStep = aStep->GetNext();          // next!
 
+    TRACE("TRACE PLACE 21.7\n");
+
 };                                     // end find base steps
+
+TRACE("TRACE PLACE 22\n");
+
 
 return(aRc);                           // return result
 
@@ -17683,15 +16212,15 @@ if (theOrdered                     &&  // if ordered
     CviStr aMembers(theParent->GetTemplates());
 
     if (strlen(aMembers) != 0)
-        DPRINT("%*.*s%s  The following members influence this step:\n",
-               theDepth*2, theDepth*2, " ");
+        TRACE("%*.*s%s  The following members influence this step:\n",
+              theDepth*2, theDepth*2, " ");
 
     const char *aMember = aMembers.Tok(",");
     while (aMember != NULL)
     {
         if (*aMember != 0)             // if not empty
-           DPRINT("%*.*s    %s\n",
-                  theDepth*2, theDepth*2, " ", aMember);
+           TRACE("%*.*s    %s\n",
+                 theDepth*2, theDepth*2, " ", aMember);
         aMember = aMembers.Tok(",");
     }
 
@@ -18376,7 +16905,6 @@ itsAddTargets = NULL;                  // prevent reuse
 
 }
 
-
 //****************************************************************************
 //
 // Function     : main
@@ -18389,25 +16917,9 @@ int main(int theArgc, const char **theArgv)
 
 CviPgm  *aPgm = NULL;                  // config program
 
-char    aReRun = false;                // re-run of templates
-char    aRollout = false;              // assume not a rollout thing
-
-
-if (CviOsIsDefined("USERPROP"))        // if re-running to generate new JCL
-
-    aReRun = true;                     // we are in re-run mode
-
-else                                   // otherwise
-
-if (CviOsIsDefined("JCL     "))        // if preparing for rollout
-
-    aRollout = true;                   // mark it
-
-
 aPgm = new BuildWorkflow               // build workflows
             (theArgc,
-             theArgv,
-             aReRun);
+             theArgv);
 
 aPgm->Trace("Checking trace - this statement causes a trace check to happen.\n");
 
@@ -18416,6 +16928,19 @@ if (aPgm->TraceEnabled())              // now check to see if the trace worked
    aTrcPgm = aPgm;                     // retain trace object if it did
 
 int aRc = aPgm->Run();                 // run task
+
+aPgm->Trace("MACRO CACHE HITS: %d  ANSWERS: %d\n",
+            aMacroCache.itsHits,
+            aMacroCache.itsAnswers);
+
+ContentBlock *aProc = ContentBlock::itsTop;
+while (aProc != NULL)
+{
+    aPgm->Trace("%s called %d times\n",
+                aProc->GetType(),
+                aProc->GetCount());
+    aProc = aProc->GetNext();
+};
 
 delete     aPgm;                       // delete program
 

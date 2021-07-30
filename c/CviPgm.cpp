@@ -1,21 +1,3 @@
-/*
-
-  This program and the accompanying materials are
-
-  made available under the terms of the Eclipse Public License v2.0 which accompanies
-
-  this distribution, and is available at https://www.eclipse.org/legal/epl-v20.html
-
-  
-
-  SPDX-License-Identifier: EPL-2.0
-
-  
-
-  Copyright Contributors to the Zowe Project.
-
-*/
-
 //****************************************************************************
 // DESCRIPTION
 //         Base class for all 'program' objects.
@@ -33,10 +15,6 @@
 
 #include "CviPgm.h"                    // ourself
 #include "CviOs.h"                     // OS calls
-#include "CviDyna.h"                   // dynamic allocation
-
-#include "btype.h"                     // types for WTO
-#include "wto.h"                       // include ARH WTO
 
 #include "ihapsa.h"                    // PSA
 #include "ihaascb.h"                   // ASCB
@@ -54,7 +32,8 @@
 //****************************************************************************
 //                              Defines
 
-#define FOPENMODE "a,recfm=fbm,lrecl=133,blksize=133"
+//#define FOPENMODE "a,recfm=FBM,lrecl=133,blksize=133"
+#define FOPENMODE "a,recfm=FB,lrecl=133,blksize=133"
 
 struct  TraceInfo
 {
@@ -65,13 +44,16 @@ struct  TraceInfo
     CviPgm *itsAllocPgm;               // allocating CviPgm object
     
     int  itsTrcLen;                    // current trace length
-    int  itsTrcUse;                    // trace in-use
 
     char itsTrcBuf[0x40000];           // big trace buffer
 };
 
-static TraceInfo *aTrcInfo;            // trace information
+TraceInfo *aTrcInfo = NULL;            // trace information
              
+CviPgm *aTaskCviPgm = NULL;            // cvipgm for task
+
+void   *aTrcBuf = NULL;                // trace buffer for task
+
 //
 //****************************************************************************
 
@@ -100,24 +82,18 @@ CviPgm::CviPgm(const char *theName,
 
 {
 
-int64_t aPgmObj = (int64_t) this;      // store our token
+itsMainForTask = FALSE;                // assume not the main pgm object for this task
 
+if (aTaskCviPgm == NULL)               // if first object
 
-itsMainForTask = FALSE;                // not the main pgm object for this task
-
-if (strcmp(theName,"EAGENT") != 0   && // if not EAGENT (special pgm) and
-    GetTaskCviPgm() == NULL)           // if main pgm not yet claimed
-
-{                                      // begin claim to be main pgm object for task
-
-    CviOsCreateNt("ZCVIPGMOBJECTTCB",  // set our pgm object for
-                  &aPgmObj,            // later use
-                  NAME_TASK);          // at task level
+{                                      // begin main task
 
     itsMainForTask = TRUE;             // we are the main one now
 
-};                                     // end claim to be main pgm object for task
+    aTaskCviPgm = this;                // set this for future reference
 
+}                                      // end main task
+                                       
 strcpy(itsStDateStr, GetDate());       // get date we are starting
 strcpy(itsStTimeStr, GetTime());       // get time we are starting
 
@@ -158,23 +134,15 @@ else                                   // otherwise
 
 };                                     // end copy string
 
-int64_t aTrcBuf;                       // trace buffer
-
-if (CviOsGetNt("ZCVITRCBUFFER   ",     // get trace buffer
-               &aTrcBuf,
-               NAME_HOME) != 0)
+if (itsMainForTask)                    // if we are the main task
 
 {                                      // begin create traceflag
 
-    aTrcBuf = (int64_t) malloc(sizeof(TraceInfo)); // get master flag
+    aTrcBuf = (void *) malloc(sizeof(TraceInfo)); // get master flag
 
-    memset((char *) (int) aTrcBuf,     // clear it
+    memset((char *) (int) aTrcBuf,   // clear it
            0,
            sizeof(TraceInfo));
-
-    CviOsCreateNt("ZCVITRCBUFFER   ",  // set trace buffer for future use
-                  &aTrcBuf,        
-                  NAME_HOME);
 
     aTrcInfo = (TraceInfo *) (int) aTrcBuf;// grab trace information struct
 
@@ -196,7 +164,7 @@ if (CviOsGetNt("ZCVITRCBUFFER   ",     // get trace buffer
 else                                   // otherwise
 
    aTrcInfo =                          // grab trace information struct 
-     (TraceInfo *) (int) aTrcBuf;
+     (TraceInfo *) aTrcBuf;
 
 }
 
@@ -211,26 +179,18 @@ CviPgm::CviPgm(const char *theName)
 
 {
 
-int64_t aPgmObj = (int64_t) this;      // store our token
+itsMainForTask = FALSE;                // assume not the main pgm object for this task
 
-itsMainForTask = FALSE;                // not the main pgm object for this task
+if (aTaskCviPgm == NULL)               // if first object
 
-if (CviOsGetNt("ZCVIPGMOBJEC2TCB",     // if no program object
-               &aPgmObj,               // defined for
-               NAME_TASK) != 0)        // "type 2" program object
-
-{                                      // begin claim to be main pgm object for task
-
-    aPgmObj = (int64_t) this;          // store our token
-
-    CviOsCreateNt("ZCVIPGMOBJEC2TCB",  // set our pgm object for
-                  &aPgmObj,            // later use
-                  NAME_TASK);          // at task level
+{                                      // begin main task
 
     itsMainForTask = TRUE;             // we are the main one now
 
-};                                     // end claim to be main pgm object for task
+    aTaskCviPgm = this;                // set this for future reference
 
+}                                      // end main task
+                                       
 strcpy(itsStDateStr, GetDate());       // get date we are starting
 strcpy(itsStTimeStr, GetTime());       // get time we are starting
 
@@ -290,48 +250,6 @@ aTrcInfo->itsTrcDisabled = FALSE;      // trace NOT disabled
 aTrcInfo->itsAllocTcb = itsTcb;        // store our TCB
 
 aTrcInfo->itsAllocPgm = this;          // we allocated it
-
-}
-
-//****************************************************************************
-//
-// Method       : GetTaskCviPgm
-//
-// Description  : Gets main CviPgm object for this task
-//
-//****************************************************************************
-CviPgm *GetTaskCviPgm()
-
-{
-
-static CviPgm *aCviPgm = NULL;         // initialize to NULL at C environment start
-
-if (aCviPgm != NULL) return aCviPgm;
-
-
-int64_t aPgmObj = 0;                   // no object yet
-
-if (CviOsGetNt("ZCVIPGMOBJEC2TCB",     // set our pgm object for
-               &aPgmObj,               // later use
-               NAME_TASK) != 0)        // at task level
-
-    aPgmObj = 0;                       // no object if failed
-
-aCviPgm = (CviPgm *) (int32_t) aPgmObj;
-
-if (aCviPgm == NULL)                   // if CVIAPI PGM not found
-
-{                                      // begin normal CviPgm
-
-    if (CviOsGetNt("ZCVIPGMOBJECTTCB", // set our pgm object for
-                   &aPgmObj,           // later use
-                   NAME_TASK) == 0)    // at task level
-
-        aCviPgm = (CviPgm *) (int32_t) aPgmObj;
-
-};                                     // end normal CviPgm
-
-return(aCviPgm);                       // return object
 
 }
 
@@ -620,23 +538,16 @@ return(itsStTimeStr);                  // return start time string
 const char *CviPgm::GetTime()
 {
 
-__register(0)  int aR0;                // time
-__register(1)  int aR1;                // R1
-__register(3)  char *aR3;              // R3
-__register(4)  char *aR4;              // R4
-__register(14) int aR14;               // R14
-__register(15) int aR15;               // R15
-
 char    aTime[16];                     // 16-byte return
 char    aParms[32];                    // parm block
 
-aR4 = aParms;                          // set parm area
+char *aParmsReg = aParms;              // set parm area
+char *aTimeReg = aTime;                // time register
 
-aR3 = aTime;                           // set return address
-
-__asm {                                // get
-     TIME DEC,(3),ZONE=LT,LINKAGE=SYSTEM,DATETYPE=MMDDYYYY,MF=(E,(4))
-}                                      // time
+__asm__("   TIME DEC,(%0),ZONE=LT,LINKAGE=SYSTEM,DATETYPE=MMDDYYYY,MF=(E,(%1))\n"
+        :"+r"(aTimeReg)
+        :"r"(aParmsReg)
+        :"r0","r1","r14","r15");
 
 sprintf(itsTimeStr,                    // set time into place
         "%02.2x:%02.2x:%02.2x.%02.2x",
@@ -661,23 +572,16 @@ return(itsTimeStr);                    // return timestamp string
 const char *CviPgm::GetDate()
 {
 
-__register(0)  int aR0;                // time
-__register(1)  int aR1;                // R1
-__register(3)  char *aR3;              // R3
-__register(4)  char *aR4;              // R4
-__register(14) int aR14;               // R14
-__register(15) int aR15;               // R15
-
 char    aDate[16];                     // 16-byte return
 char    aParms[32];                    // parm block
 
-aR4 = aParms;                          // set parm area
+char *aParmsReg = aParms;              // set parm area
+char *aDateReg = aDate;                // time register
 
-aR3 = aDate;                           // set return address
-
-__asm {                                // get
-     TIME DEC,(3),ZONE=LT,LINKAGE=SYSTEM,DATETYPE=MMDDYYYY,MF=(E,(4))
-}                                      // time
+__asm__("   TIME DEC,(%0),ZONE=LT,LINKAGE=SYSTEM,DATETYPE=MMDDYYYY,MF=(E,(%1))\n"
+        :"+r"(aDateReg)
+        :"r"(aParmsReg)
+        :"r0","r1","r14","r15");
 
 sprintf(itsDateStr,                    // set date into place
         "%02.2x/%02.2x/%02.2x%02.2x",
@@ -731,14 +635,12 @@ if (itsStdOut == NULL)                 // if not open and print
                                        
 {                                      // begin open
 
-    AllocDd("CVIPRINT");               // allocate CVIPRINT
-    
-    itsStdOut = fopen("//DDN:CVIPRINT",// attempt to open
+    itsStdOut = fopen("DD:CVIPRINT",// attempt to open
                       FOPENMODE);
 
-    if (itsStdOut != NULL)             // if OK
-
-        setlinebuf(itsStdOut);         // line buffer
+//    if (itsStdOut != NULL)             // if OK
+//
+//        setlinebuf(itsStdOut);         // line buffer
                                        
 };                                     // end open
 
@@ -1195,7 +1097,6 @@ char *aWriteOff = NULL;                // write offset
 
 va_list aArgList;                      // variable argument list
 
-int     aRetry = 500;                  // retry count - 5 full seconds...
 int     aRc = 0;                       // return code
 int     aWrote = 0;                    // bytes written
 int     aLen = 0;                      // length of trace data
@@ -1212,19 +1113,6 @@ va_end(aArgList);                      // no longer need list
 
 va_start(aArgList, theStr);            // reset to start of arguments
                                        
-while (CS(0, aTcb,                     // make sure we are the only
-          &aTrcInfo->itsTrcUse,        
-          NULL) != 0                && // task using this
-       aRetry > 0)                     // and have retries left
-
-{                                      // begin wait
-
-    CviHSleep(1);                      // rest a moment
-
-    aRetry --;                         // decrement retries
-
-};                                     // end wait
-
 if (aTrcInfo->itsTrcLen + aLen + 100 > // if we would write off
      sizeof(aTrcInfo->itsTrcBuf))      // trace buffer
 
@@ -1277,21 +1165,20 @@ if (aTrcInfo->itsTrcOn)                // if tracing is enabled
     {                                  // begin open
     
         aPgm->itsTrcOut =              // attempt to open 
-            fopen("//DDN:CVITRACE",
+            fopen("DD:CVITRACE",
                   FOPENMODE);
     
-        if (aPgm->itsTrcOut != NULL)   // if OK
-    
-            setlinebuf(aPgm->itsTrcOut); // line buffer
-    
-        else                           // otherwise
+        if (aPgm->itsTrcOut == NULL)   // if not OK
     
             aTrcInfo->itsTrcOn = FALSE;// trace is now off
+
+//        else                           // otherwise
+//
+//            setlinebuf(aPgm->itsTrcOut); // line buffer
+    
+    
                                        
     };                                 // end open
-
-    CS(aTrcInfo->itsTrcUse, 0,         // clear trace flag 
-       &aTrcInfo->itsTrcUse, NULL);        
 
     if (aPgm->itsTrcOut != NULL)       // if open
     
@@ -1304,36 +1191,9 @@ if (aTrcInfo->itsTrcOn)                // if tracing is enabled
 
         aRc = 8;                       // failure
     
-}                                      // end trace
-
-else
-
-   CS(aTrcInfo->itsTrcUse, 0,          // clear trace flag 
-      &aTrcInfo->itsTrcUse, NULL);        
+};                                     // end trace
 
 return(aRc);                           // return result
-
-}
-
-//****************************************************************************
-//
-// Method       : AllocDd
-//
-// Description  : Allocate SYSOUT DD
-//
-// Parameters   : DD name
-//
-//****************************************************************************
-int CviPgm::AllocDd(const char *theDd)
-{
-
-int iFunc = CVIDYNA_ALLOC_SYSOUT;      // allocate SYSOUT
-int iError = 0;                        // returned error
-int iRc = CVIDYNA(&iFunc,              // allocate
-                  theDd,               
-                  &iError);            
-
-return(iRc);                           // return result
 
 }
 
@@ -1548,10 +1408,6 @@ if (aTrcInfo != NULL)                  // if trace allocated
 
         Trace("Trace: Disabled\n");
 
-    if (theFlag)                       // if turning on
-        
-        AllocDd("CVITRACE");           // allocate trace DD
-
     aTrcInfo->itsTrcOn = theFlag;      // set trace flag
 
     if (theFlag)                       // if turning on trace
@@ -1604,10 +1460,8 @@ if (aTrcInfo != NULL                && // if trace allocated
 
 {                                      // begin set trace
 
-    AllocDd("CVITRACE");               // allocate trace DD, if not already
-
     FILE *aFp =                        // open up
-        fopen("//DDN:CVITRACE",        // trace
+        fopen("DD:CVITRACE",           // trace
               FOPENMODE);
 
     if (aFp != NULL)                   // if opened
@@ -1615,21 +1469,6 @@ if (aTrcInfo != NULL                && // if trace allocated
     {                                  // begin write out in-memory trace data
 
         fprintf(aFp, "\n\n -- Starting In-Memory Trace Flush --\n\n");
-
-        int aRetry = 100;              // retry count
-
-        while (CS(0, aTcb,             // make sure we are the only
-                  &aTrcInfo->itsTrcUse,        
-                  NULL) != 0        && // task using this
-               aRetry > 0)             // and have retries left
-
-        {                              // begin wait
-
-            CviHSleep(1);              // rest a moment
-
-            aRetry --;                 // decrement retries
-
-        };                             // end wait
 
         const char *aEnd =
             aTrcInfo->itsTrcBuf + aTrcInfo->itsTrcLen + 1;
@@ -1647,9 +1486,6 @@ if (aTrcInfo != NULL                && // if trace allocated
                aTrcInfo->itsTrcLen,    // entries
                1,
                aFp);
-
-        CS(aTrcInfo->itsTrcUse, 0,     // clear trace flag 
-           &aTrcInfo->itsTrcUse, NULL);        
 
         fprintf(aFp, "\n\n -- Completed In-Memory Trace Flush --\n\n");
 
@@ -1690,6 +1526,10 @@ void CviPgm::ParseFailure()
 CviPgm::~CviPgm()
 {
 
+if (aTaskCviPgm == this)               // if we are the task pgm
+
+    aTaskCviPgm = NULL;                // mark as gone
+
 if (itsStdOut != NULL)                 // if open
 
 {                                      // begin close
@@ -1722,28 +1562,13 @@ if (itsTrcOut != NULL)                 // if trace is open
 
 if (aTrcInfo->itsAllocPgm == this)     // if we allocated it
 
-{                                      // begin remove NT
-
-    CviOsDeleteNt("ZCVITRCBUFFER   ",  // remove global trace flag
-                  NAME_HOME);
+{                                      // begin remove
 
     free(aTrcInfo);                    // remove trace info
 
     aTrcInfo = NULL;                   // clear trace info
 
-};                                     // end remove NT
-
-if (itsMainForTask)                    // if we were the main pgm object
-
-{                                      // begin no longer main pgm object
-
-    if (CviOsDeleteNt("ZCVIPGMOBJEC2TCB",  // if secondary not removed
-                      NAME_TASK) != 0)
-
-       CviOsDeleteNt("ZCVIPGMOBJECTTCB",  // remove our pgm object for
-                     NAME_TASK);          // at task level
-
-};                                     // end no longer main pgm object
+};                                     // end remove
 
 }
 

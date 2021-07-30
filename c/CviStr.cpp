@@ -1,21 +1,3 @@
-/*
-
-  This program and the accompanying materials are
-
-  made available under the terms of the Eclipse Public License v2.0 which accompanies
-
-  this distribution, and is available at https://www.eclipse.org/legal/epl-v20.html
-
-  
-
-  SPDX-License-Identifier: EPL-2.0
-
-  
-
-  Copyright Contributors to the Zowe Project.
-
-*/
-
 //****************************************************************************
 // DESCRIPTION
 //         Provides a 'string' class.  This is not as efficient as normal
@@ -24,11 +6,14 @@
 // 
 //****************************************************************************
 
+//#define _ISOC99_SOURCE
+//#define _VARARG_EXT_
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
 #include <stdarg.h>
-#include <machine/atoe.h>              // EBCDIC <-> ASCII
 
 #include "CviDefs.h"                   // include defines
 #include "CviStr.h"                    // our header
@@ -163,7 +148,7 @@ void CviStr::Add(const char *theData,
 
 if (theData == NULL)                   // if no data
 
-    theDataLen  0;                     // use zero length
+    theDataLen = 0;                    // use zero length
 
 if (theDataLen < 0)                    // if no length set
 
@@ -243,12 +228,11 @@ void CviStr::ReplaceSymbols()
 {                                      // begin Replace
 
 struct symbp sSymbp;                   // ASASYMBM parameters
-void __register(2) *psSymbp;           // ASM register for parms
-void __register(3) *psSf;              // SF area
-void __register(0) *pR0;               // ASASYMBM uses R0
-void __register(1) *pR1;               // ASASYMBM uses R1
-void __register(14) *pR14;             // ASASYMBM uses R14
-void __register(15) *pR15;             // ASASYMBM uses R15
+
+void *psSymbp;                         // ASM register for parms
+void *psSf;                            // SF area
+
+char *psEploc="ASASYMBM";              // load module name
 
 char *aNewString = NULL;               // newstring
 
@@ -256,13 +240,6 @@ char sfArea[128];                      // LINKX parm area
 
 int iTgtLen = 0;                       // target length
 int iRc = 0;                           // return code for ASASYMBM
-
-long  aSave1;                          // saved slot 1
-long  aSave2;                          // saved slot 2
-long  aSave3;                          // saved slot 3
-
-__register(13) long *aSave;
-
 
 iTgtLen = itsDataLen + 256;            // set length of target
 
@@ -279,20 +256,13 @@ sSymbp.symbpreturncodeaddr = &iRc;     // return code
 psSymbp = &sSymbp;                     // set address
 psSf = sfArea;                         // use SF area
 
-aSave1 = *(aSave+0);                   // these must be
-aSave2 = *(aSave+1);                   // preserved
-aSave3 = *(aSave+2);                   // when calling
-
 memset(sfArea, 0, sizeof(sfArea));     // clear SF area
 
-__asm 
-{
-    LINKX EP=ASASYMBM,MF=(E,(2)),SF=(E,(3))
-}
-
-*(aSave+0) = aSave1;                   // restore the
-*(aSave+1) = aSave2;                   // three special words
-*(aSave+2) = aSave3;                   // for Dignus
+__asm__("   LINKX EPLOC=(%2),MF=(E,(%0)),SF=(E,(%1))\n"
+        :"+r"(psSymbp)
+        :"r"(psSf),
+         "r"(psEploc)
+        :"r0","r1","r14","r15");
 
 aNewString[iTgtLen] = 0;               // NULL terminate
 
@@ -665,12 +635,11 @@ void CviStr::ReplaceSymbol(const char *theTok,
 {                                      // begin Replace
 
 struct symbp sSymbp;                   // ASASYMBM parameters
-void __register(2) *psSymbp;           // ASM register for parms
-void __register(3) *psSf;              // SF area
-void __register(0) *pR0;               // ASASYMBM uses R0
-void __register(1) *pR1;               // ASASYMBM uses R1
-void __register(14) *pR14;             // ASASYMBM uses R14
-void __register(15) *pR15;             // ASASYMBM uses R15
+
+void *psSymbp;                         // ASM register for parms
+void *psSf;                            // SF area
+
+char *psEploc="ASASYMBM";              // load module name
 
 char *aNewString = NULL;               // newstring
 
@@ -678,12 +647,6 @@ char sfArea[128];                      // LINKX parm area
 
 int iTgtLen = 0;                       // target length
 int iRc = 0;                           // return code for ASASYMBM
-
-long  aSave1;                          // saved slot 1
-long  aSave2;                          // saved slot 2
-long  aSave3;                          // saved slot 3
-
-__register(13) long *aSave;
 
 CviStr aSymb;                          // symbol
 CviStr aValue(theValue);               // value
@@ -722,20 +685,13 @@ sSymbp.symbpreturncodeaddr = &iRc;     // return code
 psSymbp = &sSymbp;                     // set address
 psSf = sfArea;                         // use SF area
 
-aSave1 = *(aSave+0);                   // these must be
-aSave2 = *(aSave+1);                   // preserved
-aSave3 = *(aSave+2);                   // when calling
-
 memset(sfArea, 0, sizeof(sfArea));     // clear SF area
 
-__asm 
-{
-    LINKX EP=ASASYMBM,MF=(E,(2)),SF=(E,(3))
-}
-
-*(aSave+0) = aSave1;                   // restore the
-*(aSave+1) = aSave2;                   // three special words
-*(aSave+2) = aSave3;                   // for Dignus
+__asm__("   LINKX EPLOC=(%2),MF=(E,(%0)),SF=(E,(%1))\n"
+        :"+r"(psSymbp)
+        :"r"(psSf),
+         "r"(psEploc)
+        :"r0","r1","r14","r15");
 
 aNewString[iTgtLen] = 0;               // NULL terminate
 
@@ -761,12 +717,11 @@ void CviStr::ReplaceSymbols(char **theNames,
 {                                      // begin Replace
 
 struct symbp sSymbp;                   // ASASYMBM parameters
-void __register(2) *psSymbp;           // ASM register for parms
-void __register(3) *psSf;              // SF area
-void __register(0) *pR0;               // ASASYMBM uses R0
-void __register(1) *pR1;               // ASASYMBM uses R1
-void __register(14) *pR14;             // ASASYMBM uses R14
-void __register(15) *pR15;             // ASASYMBM uses R15
+
+void *psSymbp;                         // ASM register for parms
+void *psSf;                            // SF area
+
+char *psEploc="ASASYMBM";              // load module name
 
 char *aNewString = NULL;               // newstring
 
@@ -774,12 +729,6 @@ char sfArea[128];                      // LINKX parm area
 
 int iTgtLen = 0;                       // target length
 int iRc = 0;                           // return code for ASASYMBM
-
-long  aSave1;                          // saved slot 1
-long  aSave2;                          // saved slot 2
-long  aSave3;                          // saved slot 3
-
-__register(13) long *aSave;
 
 struct symbt   *aHdr;                  // symbol table
 
@@ -829,20 +778,13 @@ sSymbp.symbpreturncodeaddr = &iRc;     // return code
 psSymbp = &sSymbp;                     // set address
 psSf = sfArea;                         // use SF area
 
-aSave1 = *(aSave+0);                   // these must be
-aSave2 = *(aSave+1);                   // preserved
-aSave3 = *(aSave+2);                   // when calling
-
 memset(sfArea, 0, sizeof(sfArea));     // clear SF area
 
-__asm 
-{
-    LINKX EP=ASASYMBM,MF=(E,(2)),SF=(E,(3))
-}
-
-*(aSave+0) = aSave1;                   // restore the
-*(aSave+1) = aSave2;                   // three special words
-*(aSave+2) = aSave3;                   // for Dignus
+__asm__("   LINKX EPLOC=(%2),MF=(E,(%0)),SF=(E,(%1))\n"
+        :"+r"(psSymbp)
+        :"r"(psSf),
+         "r"(psEploc)
+        :"r0","r1","r14","r15");
 
 aNewString[iTgtLen] = 0;               // NULL terminate
 
@@ -1254,6 +1196,32 @@ return(aTok);                          // return token
 
 //****************************************************************************
 //
+// Method       : CviStr::XmlEscape
+//
+// Description  : Convert special character to escape sequences for XML
+//
+//****************************************************************************
+void CviStr::XMLEscape()          
+
+{                                      // begin XMLEscape
+
+Replace("&#44;", ",");                 // reverse to prevent replace errors below
+Replace("&amp;", "&");                 // reverse to prevent replace errors below
+Replace("&gt;", ">");                  // reverse to prevent replace errors below
+Replace("&lt;", "<");                  // reverse to prevent replace errors below
+Replace("&quot;", "\"");               // reverse to prevent replace errors below
+Replace("&apos;", "'");                // reverse to prevent replace errors below
+
+Replace("&", "&amp;");                 // escape &
+Replace("<", "&lt;");                  // escape <   
+Replace(">", "&gt;");                  // escape >
+Replace("\"", "&quot;");               // escape "
+Replace("'", "&apos;");                // escape '
+
+}                                      // end XMLEscape
+
+//****************************************************************************
+//
 // Method       : CviStr::VelocityEscape
 //
 // Description  : Adds Velocity escape sequencing
@@ -1328,7 +1296,7 @@ if (aOpen != NULL)                     // if found
 
     {                                  // begin find close/remove
                                        
-        char *aClose = strstr(aOpen, "]]#");
+        const char *aClose = strstr(aOpen, "]]#");
 
         if (aClose != NULL)                // found close?
         {                                  // begin remove open/close
@@ -1369,36 +1337,6 @@ CviStr::operator char *() const        // convert to char *
 return(itsData);                       // return data
 
 }                                      // end const
-
-//****************************************************************************
-//
-// Method       : CviStr::ToEBCDIC
-//
-// Description  : Convert to EBCDIC
-//
-//****************************************************************************
-void CviStr::ToEBCDIC()                // convert to EBCDIC
-
-{                                      // begin convert
-
-__stratoe((unsigned char *) itsData);  // convert ASCII to EBCDIC
-
-}                                      // end convert
-
-//****************************************************************************
-//
-// Method       : CviStr::ToAscii
-//
-// Description  : Convert to ASCII
-//
-//****************************************************************************
-void CviStr::ToAscii()                 // convert to ASCII
-
-{                                      // begin convert
-
-__stretoa((unsigned char *) itsData);  // convert EBCDIC to ASCII
-
-}                                      // end convert
 
 //****************************************************************************
 //
