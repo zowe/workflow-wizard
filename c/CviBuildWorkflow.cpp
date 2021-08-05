@@ -148,7 +148,16 @@ int ReadFile(const char *theName,      // filename
 
 int aRc = 0;                           // OK so far
 
-FILE *aFp = fopen(theName, "r");       // open command dataset
+FILE *aFp;
+ 
+
+if (!strcmp(theName, "DD:SYSIN"))      // if trying to read SYSIN info
+
+    aFp = stdin;                       // use stdin
+
+else                                   // otherwise
+
+    aFp = fopen(theName, "r");         // open command dataset
 
 if (aFp != NULL)                       // if OK
 
@@ -160,6 +169,8 @@ if (aFp != NULL)                       // if OK
                         1,
                         sizeof(aBuffer),
                         aFp);
+
+    GetTaskCviPgm()->Print("Read %d bytes\n", aRecLen);
 
     while (aRecLen > 0)                // for all data
 
@@ -11412,7 +11423,16 @@ int aRc = 0;                           // OK so far
 CviStr aData;                          // input data
 
 
-aRc = ReadFile("DD:SYSIN", aData);     // read input data
+int aArg = 1;
+while (aArg < itsArgc)
+{
+    aData.Add(itsArgv[aArg]);
+    aData.Add("\n");
+    aArg ++;
+}
+
+Trace("Read input: %d\n", aRc);
+Trace("Data: \n%s\n", (const char *) aData);
 
 if (aRc == 0)                          // if read was good
 
@@ -11520,6 +11540,21 @@ if (aRc == 0)                          // if read was good
 
 
            }                           // end WORKFLOW_DSN
+
+           else                        // otherwise
+           if (!strcmp(aCmd,           // template DD?
+                       "TRACE"))    
+
+           {                           // begin TEMPLATE
+
+               ToggleTrace(true);
+
+               if (aVal != NULL)       // if valid
+
+                   AddList(itsTemplateDSNList,
+                           aVal);
+
+           }                           // end TEMPLATE
 
            else                        // otherwise
 
@@ -16914,6 +16949,9 @@ itsAddTargets = NULL;                  // prevent reuse
 //****************************************************************************
 int main(int theArgc, const char **theArgv)
 {
+
+setbuf(stdout, NULL);
+setbuf(stderr, NULL);
 
 CviPgm  *aPgm = NULL;                  // config program
 

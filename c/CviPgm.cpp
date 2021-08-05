@@ -150,8 +150,7 @@ if (itsMainForTask)                    // if we are the main task
            "CVITRCBF",                 // eye-catcher
            8);
 
-    aTrcInfo->itsTrcOn = TRUE;         // assume trace should be on
-                                       // it'll turn off if CVITRACE not allocated.
+    aTrcInfo->itsTrcOn = FALSE;        // assume trace shouldn't be enabled 
 
     aTrcInfo->itsAllocTcb = itsTcb;    // store our TCB
 
@@ -242,8 +241,7 @@ memcpy(aTrcInfo->itsEye,               // set the
        "CVITRCBF",                     // eye-catcher
        8);                             
 
-aTrcInfo->itsTrcOn = TRUE;             // assume trace should be on
-                                       // it'll turn off if CVITRACE not allocated.
+aTrcInfo->itsTrcOn = FALSE;            // no trace yet
 
 aTrcInfo->itsTrcDisabled = FALSE;      // trace NOT disabled
 
@@ -635,8 +633,9 @@ if (itsStdOut == NULL)                 // if not open and print
                                        
 {                                      // begin open
 
-    itsStdOut = fopen("DD:CVIPRINT",// attempt to open
-                      FOPENMODE);
+//    itsStdOut = fopen("DD:CVIPRINT",// attempt to open
+//                      FOPENMODE);
+      itsStdOut = stdout;
 
 //    if (itsStdOut != NULL)             // if OK
 //
@@ -1164,9 +1163,11 @@ if (aTrcInfo->itsTrcOn)                // if tracing is enabled
                                        
     {                                  // begin open
     
-        aPgm->itsTrcOut =              // attempt to open 
-            fopen("DD:CVITRACE",
-                  FOPENMODE);
+        aPgm->itsTrcOut = stderr;      // use stderr for trace
+
+//        aPgm->itsTrcOut =              // attempt to open 
+//            fopen("DD:CVITRACE",
+//                  FOPENMODE);
     
         if (aPgm->itsTrcOut == NULL)   // if not OK
     
