@@ -1,0 +1,42 @@
+TYPE=PROMPT
+
+--CONTENT--
+
+PROMPT=MY_PORT
+REQUIRED=true
+CATEGORY=Ports
+LABEL=Some Port
+ABSTRACT=Enter some port numbers here. Try it.
+DESCRIPTION=Enter a port.\
+ See <a href="url">here</a> for more information.
+TYPE=INTEGER
+MINVAL=1000
+MAXVAL=99999
+SORT_ORDER=5100
+
+PROMPT=MY_CHOICE
+REQUIRED=true
+CATEGORY=Choices
+LABEL=Some Choice
+ABSTRACT=Please select a choice.
+DESCRIPTION=This is a sample choice.                                                                                        nfo.
+CHOICE=Choice1
+CHOICE=Choice2
+DEFAULT=Choice1
+TYPE=CHOICE
+SORT_ORDER=6100
+
+PROMPT=UIM_PORT
+REQUIRED=true
+CATEGORY=Ports
+LABEL=UIM Port
+ABSTRACT=Enter a port number for UIM to use
+DESCRIPTION=See <a href="url">here</a> for more information.
+DEFAULT=6310
+TYPE=INTEGER
+MINVAL=1000
+MAXVAL=99999
+SORT_ORDER=5200
+
+--END CONTENT--
+
