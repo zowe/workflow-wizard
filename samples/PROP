@@ -1,4 +1,7 @@
+WF_ID=MYWFID1
+ENV_NAME=Mine
+MYVAR1=My Value 1
+MYPROD=Bart
 MY_LIST=[{"Name":"Bart", "Opt":"APF"}, \
          {"Name":"Lisa", "Opt":"APF"}, \
          {"Name":"Marge", "Opt":"Normal"}]
-MYVAR1=My Value 1
