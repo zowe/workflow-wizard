@@ -30,4 +30,5 @@ echo "$SCRIPT_NAME coping files should be in pax ..."
 cd "$SCRIPT_DIR/content"
 cp -r ../bak/bin .
 cp -r ../bak/doc .
+cp -r ../bak/samples .
 

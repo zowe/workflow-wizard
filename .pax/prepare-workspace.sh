@@ -32,6 +32,6 @@ rm -fr "${PAX_WORKSPACE_DIR}/content" && mkdir -p "${PAX_WORKSPACE_DIR}/content"
 mkdir "${PAX_WORKSPACE_DIR}/content/bin"
 
 echo "[${SCRIPT_NAME}] copying files ..."
-cp -R c h build version.txt "${PAX_WORKSPACE_DIR}/ascii"
+cp -R c h build version.txt samples "${PAX_WORKSPACE_DIR}/ascii"
 cp -R doc                   "${PAX_WORKSPACE_DIR}/content"
 
