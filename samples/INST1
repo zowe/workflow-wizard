@@ -1,0 +1,13 @@
+TITLE=Instructions 1
+GROUP=Group1
+DESCRIPTION=Sample instruction-only step
+TYPE=INSTRUCTIONS
+--INSTRUCTIONS--
+Put your instructions here.
+
+Repeat for the following items:
+#FOR_EACH(${MY_LIST}:L,${L}[Opt] != "APF")
+<ul>${L}[Name]</ul>
+#END_FOR_EACH
+
+--END INSTRUCTIONS--

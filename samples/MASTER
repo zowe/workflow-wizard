@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="IBM-1047" standalone="yes"?>
+<workflow>
+    <autoTakeOwnership>true</autoTakeOwnership>
+    <workflowInfo>
+        <workflowID scope="none">${WF_ID}</workflowID>
+        <workflowDescription>Configure Environment ${ENV_NAME}
+        </workflowDescription>
+        <workflowVersion>1.00</workflowVersion>
+        <vendor>BMC Software, Inc.</vendor>
+        <General/>
+    </workflowInfo>
+    <variable name="izud-datasets">
+      <label>Zones</label>
+      <abstract>System</abstract>
+      <description>System</description>
+      <category>SWI Variables</category>
+      <array/>
+    </variable>
+    <variable name="BMCENVS" scope="global">
+      <label>Environments</label>
+      <abstract>System</abstract>
+      <description>System</description>
+      <category>BMC Variables</category>
+      <array/>
+    </variable>
+
+--STEPS--
+
+</workflow>
+

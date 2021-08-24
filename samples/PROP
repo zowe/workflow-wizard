@@ -1,0 +1,4 @@
+MY_LIST=[{"Name":"Bart", "Opt":"APF"}, \
+         {"Name":"Lisa", "Opt":"APF"}, \
+         {"Name":"Marge", "Opt":"Normal"}]
+MYVAR1=My Value 1

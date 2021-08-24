@@ -10492,7 +10492,8 @@ if (!strcmp(itsType, "GROUP"))         // if GROUP
     // If child count is good, process
 
     if (strlen(aChildXml) > 0       && // if XML was generated
-         aChildCnt > 1)                // and it has multple children
+        (!itsCombineSteps ||
+         aChildCnt > 1))               // and it has multple children
 
     {                                  // begin add step
 
@@ -10598,7 +10599,8 @@ else                                   // otherwise
     TRACE("Generating step %s\n",
                             (const char *) itsName);
 
-    if (!itsCombineSteps)              // if combining steps is NOT OK
+    if (!itsCombineSteps &&            // if combining steps is NOT OK
+        itsGrp != NULL)                // and we have a group
 
         itsGrp->itsCombine = 'N';      // then do NOT combine
 
@@ -11431,8 +11433,7 @@ while (aArg < itsArgc)
     aArg ++;
 }
 
-Trace("Read input: %d\n", aRc);
-Trace("Data: \n%s\n", (const char *) aData);
+// TO DO: Have it read from some SYSIN if this is a true batch program...
 
 if (aRc == 0)                          // if read was good
 
@@ -11445,18 +11446,22 @@ if (aRc == 0)                          // if read was good
 
     {                                  // begin process line
 
+        Print("Argument %s\n", aLine);
+
         CviStr aStmt(aLine);           // statement
 
         aStmt.Trim(' ');               // trim trailing spaces
 
-        const char *aCmd =             // get 
+        const char *aCmdPtr =          // get 
             aStmt.Tok("=");            // command
 
-        if (aCmd != NULL)              // valid?
+        if (aCmdPtr != NULL)           // valid?
 
         {                              // begin process command
 
-            const char *aVal =         // get value
+           CviStr aCmd(aCmdPtr);
+
+           const char *aVal =         // get value
                 aStmt.Tok("");         // get remaining line
 
            if (!strcmp(aCmd,           // template DD?
@@ -11466,8 +11471,15 @@ if (aRc == 0)                          // if read was good
 
                if (aVal != NULL)       // if valid
 
+               {
+
                    AddList(itsTemplateDSNList,
                            aVal);
+
+                   Print("Adding template library %s\n",
+                         aVal);
+
+               }
 
            }                           // end TEMPLATE
 
@@ -11549,6 +11561,8 @@ if (aRc == 0)                          // if read was good
 
                ToggleTrace(true);
 
+               aTrcPgm = GetTaskCviPgm();
+
                if (aVal != NULL)       // if valid
 
                    AddList(itsTemplateDSNList,
@@ -11561,7 +11575,7 @@ if (aRc == 0)                          // if read was good
            {                           // begin failure
 
                Error("%s is not a valid command.\n",
-                     aCmd);
+                     (const char *) aCmd);
 
                aRc = 8;                // fail
 
@@ -13413,6 +13427,7 @@ if (aOutFp != NULL)                    // if opened
 
                     Print("No workflow steps generated. Generating instruction step indicating failure.\n");
 
+                    aDefTemp.Print("NAME=ERROR\n");
                     aDefTemp.Print("TYPE=INSTRUCTIONS\n");
                     aDefTemp.Print("TITLE=Error Generating Workflow\n");
                     aDefTemp.Print("AUTO=OFF\n");
@@ -13420,13 +13435,20 @@ if (aOutFp != NULL)                    // if opened
                     aDefTemp.Print("Something went wrong and the workflow generator found no workflow steps to perform.\n");
                     aDefTemp.Print("Please check the workflow generation job for more details.\n");
 
+                    TRACE("Parsing default WF\n");
 
                     aDefault.ParseData(aDefTemp, itsPropVars);
+
+                    TRACE("Generating XML\n");
 
                     aDefault.GenXML(aStepXML, &itsWfVars,
                                     itsPropVars,
                                     itsMacros,
                                     itsTranslates);
+
+                    TRACE("Finished generating XML\n");
+
+                    aRc = 8;           // fail
 
                 };                     // end add a default step
 
@@ -13601,14 +13623,14 @@ if (aFp != NULL)                       // if OK
           aCount,
           (const char *) theMember);
 
-    TRACE("Read\n");
-
     char aBuffer[8192];
 
     int aRecLen = fread(aBuffer,
                         1,
                         sizeof(aBuffer),
                         aFp);
+
+    TRACE("Read %d\n", aRecLen);
 
     while (aRecLen > 0)                // for all data
 
